@@ -54,16 +54,18 @@ func (r *Runtime) Actions() []Action {
 	}{
 		{"get_version_info", "Runtime and protocol versions", true, nil}, {"get_status", "Channel connection status", true, nil}, {"get_login_info", "Current mapped account identity", true, nil},
 		{"get_friend_list", "Known private contacts (cached)", true, nil}, {"get_group_list", "Known groups (cached)", true, nil}, {"get_group_info", "Cached group information", true, []string{"group_id"}},
+		{"get_group_member_info", "Observed group member information; authority/roster completeness unknown", true, []string{"group_id", "user_id"}},
 		{"get_stranger_info", "Known user information", true, []string{"user_id"}}, {"get_msg", "Read an observed message or delivery", true, []string{"message_id"}},
 		{"send_msg", "Send text, mentions and bounded image/file parts", false, []string{"message"}}, {"send_private_msg", "Send a private message", false, []string{"user_id", "message"}}, {"send_group_msg", "Send a group message", false, []string{"group_id", "message"}},
 		{"get_image", "Download a received image and resolve a bounded media URL", true, []string{"file"}},
 		{"can_send_image", "Image submission capability", true, nil}, {"can_send_record", "Voice submission capability", true, nil}, {"wechat_get_capabilities", "Declared compatibility limits", true, nil}, {"wechat_get_delivery", "Read durable delivery status", true, []string{"delivery_id"}},
 	} {
 		p := map[string]any{}
-		for _, name := range []string{"user_id", "group_id", "message_id"} {
+		for _, name := range []string{"user_id", "group_id", "message_id", "self_id"} {
 			p[name] = map[string]any{"anyOf": []any{map[string]any{"type": "integer", "minimum": 1, "maximum": 2147483647}, map[string]any{"type": "string", "pattern": "^[1-9][0-9]*$"}}}
 		}
 		p["message"] = map[string]any{"anyOf": []any{map[string]any{"type": "string"}, map[string]any{"type": "array", "items": map[string]any{"type": "object", "required": []string{"type", "data"}}}}}
+		p["no_cache"] = map[string]any{"type": "boolean"}
 		p["auto_escape"] = map[string]any{"type": "boolean"}
 		p["message_type"] = map[string]any{"type": "string", "enum": []string{"private", "group"}}
 		p["file"] = map[string]any{"type": "string"}
@@ -71,6 +73,8 @@ func (r *Runtime) Actions() []Action {
 		p["wechat_request_id"] = map[string]any{"type": "string", "maxLength": 128}
 		names := append([]string(nil), v.required...)
 		switch v.name {
+		case "get_group_member_info":
+			names = []string{"group_id", "user_id", "no_cache"}
 		case "send_msg":
 			names = []string{"message", "message_type", "user_id", "group_id", "auto_escape", "wechat_request_id"}
 		case "send_private_msg":
@@ -78,7 +82,7 @@ func (r *Runtime) Actions() []Action {
 		case "send_group_msg":
 			names = []string{"message", "group_id", "auto_escape", "wechat_request_id"}
 		}
-		properties := map[string]any{}
+		properties := map[string]any{"self_id": p["self_id"]}
 		for _, name := range names {
 			properties[name] = p[name]
 		}
@@ -117,6 +121,24 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		return fail(1500, "request_cancelled")
 	}
 	snap := r.Channel.Snapshot()
+	var self int64
+	var err error
+	if _, provided := q.Params["self_id"]; provided {
+		requested, e := paramID(q.Params, "self_id")
+		if e != nil {
+			return fail(1400, "invalid_self_id")
+		}
+		if snap.Account == "" {
+			return fail(1500, "account_unavailable")
+		}
+		self, err = r.State.ID(snap.Account, "user", snap.Self.ID)
+		if err != nil {
+			return fail(1500, "state_unavailable")
+		}
+		if requested != self {
+			return fail(100, "account_scope_changed")
+		}
+	}
 	if q.Action == "get_version_info" {
 		return good(map[string]any{"app_name": "wechat-runtime", "app_version": "0.1.0-dev", "protocol_version": "v11", "platform": "wechat"})
 	}
@@ -135,11 +157,47 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 	if snap.Account == "" {
 		return fail(1500, "account_unavailable")
 	}
-	self, err := r.State.ID(snap.Account, "user", snap.Self.ID)
-	if err != nil {
-		return fail(1500, "state_unavailable")
+	if self == 0 {
+		self, err = r.State.ID(snap.Account, "user", snap.Self.ID)
+		if err != nil {
+			return fail(1500, "state_unavailable")
+		}
 	}
 	switch q.Action {
+	case "get_group_member_info":
+		group, e := paramID(q.Params, "group_id")
+		if e != nil {
+			return fail(1400, "invalid_group_id")
+		}
+		user, e := paramID(q.Params, "user_id")
+		if e != nil {
+			return fail(1400, "invalid_user_id")
+		}
+		fresh, e := paramBool(q.Params, "no_cache")
+		if e != nil {
+			return fail(1400, "invalid_no_cache")
+		}
+		if fresh {
+			return fail(100, "fresh_member_lookup_not_supported")
+		}
+		g, ok := r.State.resolve(snap.Account, "group", group)
+		if !ok {
+			return fail(100, "group_unavailable")
+		}
+		u, ok := r.State.resolve(snap.Account, "user", user)
+		if !ok {
+			return fail(100, "member_unavailable")
+		}
+		roster, e := r.Channel.Members(snap.Account, g.Key)
+		if e != nil {
+			return fail(100, "group_unavailable")
+		}
+		for _, member := range roster.Users {
+			if member.ID == u.Key {
+				return good(map[string]any{"group_id": group, "user_id": user, "nickname": member.Name, "card": "", "wechat_role_known": false, "wechat_roster_complete": roster.Complete, "wechat_source": roster.Source})
+			}
+		}
+		return fail(100, "member_unavailable")
 	case "get_login_info":
 		return good(map[string]any{"user_id": self, "nickname": snap.Self.Name})
 	case "get_friend_list":
@@ -531,7 +589,7 @@ func (r *Runtime) Convert(ev bot.Event) (map[string]any, error) {
 		}
 		v["group_id"] = n
 		v["anonymous"] = nil
-		v["sender"].(map[string]any)["role"] = "member"
+		v["sender"].(map[string]any)["wechat_role_known"] = false
 	}
 	return v, nil
 }

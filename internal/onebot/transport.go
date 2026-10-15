@@ -26,6 +26,7 @@ type ConnectionStatus struct {
 	Error      string `json:"error,omitempty"`
 	Reconnects uint64 `json:"reconnects"`
 	Since      int64  `json:"since"`
+	Cursor     uint64 `json:"cursor"`
 }
 type ReverseConfig struct {
 	Name  string `json:"name"`
@@ -72,6 +73,13 @@ func (s *Server) status(name, kind, state, category string, reconnect bool) {
 		v.Reconnects++
 	}
 	s.statuses[name] = v
+}
+func (s *Server) progress(name string, cursor uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	status := s.statuses[name]
+	status.Cursor = cursor
+	s.statuses[name] = status
 }
 func (s *Server) Close(ctx context.Context) error {
 	s.mu.Lock()
@@ -286,6 +294,7 @@ func (s *Server) serveConn(parent context.Context, c *websocket.Conn, role, cons
 		if err = s.Runtime.State.setCursor(snap.Account, consumer, cursor); err != nil {
 			return
 		}
+		s.progress(consumer, cursor)
 	}
 	if role != "API" {
 		if writer.json(map[string]any{"time": time.Now().Unix(), "self_id": self, "post_type": "meta_event", "meta_event_type": "lifecycle", "sub_type": "connect"}) != nil {
@@ -402,6 +411,7 @@ func (s *Server) serveConn(parent context.Context, c *websocket.Conn, role, cons
 					if s.Runtime.State.setCursor(snap.Account, consumer, cursor) != nil {
 						return
 					}
+					s.progress(consumer, cursor)
 				}
 			}
 		}

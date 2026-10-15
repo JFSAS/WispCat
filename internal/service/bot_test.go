@@ -35,6 +35,27 @@ func TestBotCanonicalSenderAcrossPrivateAndTwoGroups(t *testing.T) {
 		t.Fatal("group identities collapsed")
 	}
 }
+
+func TestBotObservedRosterUsesCanonicalUserIdentity(t *testing.T) {
+	s := recoveryFixture(t)
+	a := BotAdapter{Service: s}
+	room := []byte("room@chatroom")
+	s.ingestLocked(protocol.SyncResult{Messages: []protocol.Message{{Sender: room, Recipient: s.data.Session.Bootstrap.Username, Content: []byte("friend:\nhello"), Type: 1, Timestamp: 1700000000, ServerID: 1}}})
+	roster, err := a.Members(s.data.Binding, s.sessionID(room))
+	if err != nil || roster.Complete || len(roster.Users) != 2 {
+		t.Fatal(roster, err)
+	}
+	known := map[string]bool{}
+	for _, member := range roster.Users {
+		known[member.ID] = true
+	}
+	if !known[s.sessionID([]byte("friend"))] || !known[s.sessionID(s.data.Session.Bootstrap.Username)] {
+		t.Fatal("group-local IDs escaped observed roster")
+	}
+	if _, err = a.Members("other", s.sessionID(room)); err == nil {
+		t.Fatal("roster crossed account scope")
+	}
+}
 func TestBotSubmissionIdempotencyRestartAndMentions(t *testing.T) {
 	s := recoveryFixture(t)
 	s.data.NextClientID = 1

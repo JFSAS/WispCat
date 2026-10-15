@@ -77,19 +77,35 @@ func New(c Config) (*Host, error) {
 	if err != nil {
 		return cleanup(err)
 	}
+	profiles := map[string]instances.Profile{}
 	for _, a := range c.Accounts {
 		p, e := catalog.Ensure(a.Instance)
 		if e != nil {
 			return cleanup(e)
 		}
+		profiles[a.Name] = p
+	}
+	// Include temporarily disabled instances before allocating any new public
+	// IDs, so a later re-enable cannot lose its legacy numbers to a new account.
+	registered, err := catalog.List()
+	if err != nil {
+		return cleanup(err)
+	}
+	legacy := make([]string, 0, len(registered))
+	for _, p := range registered {
+		legacy = append(legacy, filepath.Join(p.Directory, "onebot"))
+	}
+	shared, e := onebot.OpenSharedState(filepath.Join(c.StateDir, "onebot"), legacy)
+	if e != nil {
+		return cleanup(e)
+	}
+	for _, a := range c.Accounts {
+		p := profiles[a.Name]
 		if e = service.RecoverBotIntents(p.Directory); e != nil {
 			return cleanup(e)
 		}
 		channel := service.New(p.Directory, time.Second, p.App)
-		state, e := onebot.OpenState(filepath.Join(p.Directory, "onebot"))
-		if e != nil {
-			return cleanup(e)
-		}
+		state := shared
 		secret, _ := token(a.TokenEnv)
 		adapter := onebot.NewServer(onebot.New(service.BotAdapter{Service: channel}, state), secret, "")
 		settings, e := openConnectionSettings(p.Directory, c, a)

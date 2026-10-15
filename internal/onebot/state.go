@@ -19,12 +19,16 @@ type reference struct {
 	Kind    string `json:"kind"`
 	Key     string `json:"key"`
 }
+
+const maxStateBytes = 32 << 20
+
 type durableState struct {
 	Version int                  `json:"version"`
 	Next    int64                `json:"next"`
 	IDs     map[string]int64     `json:"ids"`
 	Refs    map[string]reference `json:"refs"`
 	Cursors map[string]uint64    `json:"cursors"`
+	Imports map[string]string    `json:"imports,omitempty"`
 }
 
 // State persists account-scoped, collision-free v11 IDs and per-consumer cursors.
@@ -60,7 +64,7 @@ func OpenState(directory string) (*State, error) {
 	block, _ := aes.NewCipher(key)
 	aead, _ := cipher.NewGCM(block)
 	s := &State{path: filepath.Join(directory, "onebot.state"), aead: aead, data: durableState{Version: 1, Next: 10000, IDs: map[string]int64{}, Refs: map[string]reference{}, Cursors: map[string]uint64{}}}
-	raw, err := store.ReadPrivate(s.path, 32<<20)
+	raw, err := store.ReadPrivate(s.path, maxStateBytes)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
 	}
@@ -93,6 +97,9 @@ func (s *State) saveLocked() error {
 	plain, err := json.Marshal(s.data)
 	if err != nil {
 		return err
+	}
+	if len(plain)+s.aead.NonceSize()+s.aead.Overhead() > maxStateBytes {
+		return errors.New("onebot_state_size_limit")
 	}
 	nonce := make([]byte, s.aead.NonceSize())
 	if _, err = rand.Read(nonce); err != nil {

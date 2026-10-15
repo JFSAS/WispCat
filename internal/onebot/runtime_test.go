@@ -39,6 +39,15 @@ func (c *fakeChannel) Snapshot() bot.Snapshot { c.mu.Lock(); defer c.mu.Unlock()
 func (c *fakeChannel) Users() []bot.User {
 	return []bot.User{{ID: "owner", Name: "Bot"}, {ID: "friend", Name: "Friend"}}
 }
+func (c *fakeChannel) Members(account, conversation string) (bot.Roster, error) {
+	if account != c.Snapshot().Account {
+		return bot.Roster{}, bot.ErrScope
+	}
+	if conversation != "room" {
+		return bot.Roster{}, bot.ErrNotFound
+	}
+	return bot.Roster{Users: c.Users(), Complete: false, Source: "observed_messages"}, nil
+}
 func (c *fakeChannel) Conversations() []bot.Conversation {
 	return []bot.Conversation{{ID: "friend", Kind: "private", Name: "Friend"}, {ID: "room", Kind: "group", Name: "Group"}}
 }

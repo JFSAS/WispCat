@@ -25,6 +25,11 @@ type Conversation struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
 }
+type Roster struct {
+	Users    []User `json:"users"`
+	Complete bool   `json:"complete"`
+	Source   string `json:"source"`
+}
 type Snapshot struct {
 	Account     string `json:"account_id"`
 	Self        User   `json:"self"`
@@ -90,6 +95,7 @@ type Content struct {
 type Channel interface {
 	Snapshot() Snapshot
 	Users() []User
+	Members(account, conversation string) (Roster, error)
 	Conversations() []Conversation
 	Events(account string, after uint64, limit int) ([]Event, error)
 	Message(account, id string) (Event, error)

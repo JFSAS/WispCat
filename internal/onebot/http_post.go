@@ -99,6 +99,7 @@ func (s *Server) RunPost(parent context.Context, cfg PostConfig) (runErr error) 
 					return e
 				}
 				cursor = ev.Sequence
+				s.progress(cfg.Name, cursor)
 				if len(bytes.TrimSpace(body)) > 0 {
 					if e = s.quickReply(ctx, cfg.Name, ev, value, body); e != nil {
 						s.status(cfg.Name, "httpClient", "degraded", "quick_operation_failed", false)
@@ -109,6 +110,7 @@ func (s *Server) RunPost(parent context.Context, cfg PostConfig) (runErr error) 
 				if e = s.Runtime.State.setCursor(account, cfg.Name, cursor); e != nil {
 					return e
 				}
+				s.progress(cfg.Name, cursor)
 			}
 		}
 		if failed {

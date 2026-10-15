@@ -8,10 +8,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/JFSAS/wechat-runtime/internal/instances"
+	"github.com/JFSAS/wechat-runtime/internal/onebot"
 )
 
 func testConfig(t *testing.T) Config {
@@ -19,6 +23,50 @@ func testConfig(t *testing.T) Config {
 	t.Setenv("TEST_ADMIN_TOKEN", "synthetic-admin-token")
 	t.Setenv("TEST_BOT_TOKEN", "synthetic-onebot-token")
 	return Config{StateDir: t.TempDir(), Listen: "127.0.0.1:0", TokenEnv: "TEST_ADMIN_TOKEN", Accounts: []Account{{Name: "first", Instance: "instance:first", Mode: "offline", Listen: "127.0.0.1:0", TokenEnv: "TEST_BOT_TOKEN"}, {Name: "second", Instance: "instance:second", Mode: "offline", Listen: "127.0.0.1:0", TokenEnv: "TEST_BOT_TOKEN"}}}
+}
+
+func TestSharedPublicIDsReserveDisabledLegacyInstances(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Accounts = cfg.Accounts[:1]
+	catalog, err := instances.Open(cfg.StateDir, cfg.Accounts[0].Instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := catalog.Ensure("instance:disabled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := onebot.OpenState(filepath.Join(disabled.Directory, "onebot"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldID, err := legacy.ID("account-disabled", "user", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close(context.Background())
+	state := h.accounts[0].adapter.Runtime.State
+	newID, err := state.ID("account-new", "user", "owner")
+	if err != nil || newID == oldID {
+		t.Fatal("new account claimed disabled instance's public ID", newID, oldID, err)
+	}
+	if err = h.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Accounts = append(cfg.Accounts, Account{Name: "disabled", Instance: "instance:disabled", Mode: "offline", Listen: "127.0.0.1:0", TokenEnv: "TEST_BOT_TOKEN"})
+	reopened, err := New(cfg)
+	if err != nil {
+		t.Fatal("re-enabled legacy instance collided with new account", err)
+	}
+	defer reopened.Close(context.Background())
+	restored, err := reopened.accounts[1].adapter.Runtime.State.ID("account-disabled", "user", "owner")
+	if err != nil || restored != oldID {
+		t.Fatal("disabled instance lost its public ID", restored, oldID, err)
+	}
 }
 
 func TestCloseReleasesListenerNeverRegisteredWithHTTPServer(t *testing.T) {
@@ -149,6 +197,11 @@ func TestOfflineMultiAccountRuntimeAndStateLock(t *testing.T) {
 	}
 	if h.accounts[0].channel.Snapshot().Epoch == h.accounts[1].channel.Snapshot().Epoch {
 		t.Fatal("instances share a send epoch")
+	}
+	first, _ := h.accounts[0].adapter.Runtime.State.ID("synthetic-a", "user", "owner-a")
+	second, _ := h.accounts[1].adapter.Runtime.State.ID("synthetic-b", "user", "owner-b")
+	if first == second {
+		t.Fatal("two accounts advertise the same bot self_id")
 	}
 	for _, a := range h.accounts {
 		q, _ := http.NewRequest("GET", "http://"+a.listener.Addr().String()+"/get_version_info", nil)

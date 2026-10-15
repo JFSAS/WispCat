@@ -97,6 +97,24 @@ func (a BotAdapter) Users() []bot.User {
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result
 }
+func (a BotAdapter) Members(account, conversation string) (bot.Roster, error) {
+	s := a.Service
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := bot.Roster{Users: []bot.User{}, Complete: false, Source: "observed_messages"}
+	if !s.mediaScopeLocked() || s.data.Binding != account {
+		return result, bot.ErrScope
+	}
+	room, exists := s.groupRoomsLocked()[conversation]
+	if !exists {
+		return result, bot.ErrNotFound
+	}
+	for _, raw := range s.groupMembersLocked(room) {
+		result.Users = append(result.Users, bot.User{ID: s.sessionID(raw), Name: s.groupMemberLabelLocked(room, raw)})
+	}
+	sort.Slice(result.Users, func(i, j int) bool { return result.Users[i].ID < result.Users[j].ID })
+	return result, nil
+}
 func (a BotAdapter) eventLocked(m protocol.Message, sequence uint64) bot.Event {
 	s := a.Service
 	owner := s.data.Session.Bootstrap.Username
