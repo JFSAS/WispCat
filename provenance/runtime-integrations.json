@@ -1,0 +1,46 @@
+{
+  "internal/service/service.go": {
+    "reason": "Attach optional runtime history ownership and commit durable facts before advancing the inherited checkpoint. Wire/session/client logic is unchanged.",
+    "insertions": [
+      {
+        "before_line": 58,
+        "text": "\thistory                       *EventHistory // optional independent runtime persistence\n"
+      },
+      {
+        "before_line": 166,
+        "text": "\t}\n\tif s.history != nil {\n\t\tif err := s.history.persistLocked(s); err != nil {\n\t\t\treturn err\n\t\t}\n"
+      }
+    ]
+  },
+  "internal/service/channel.go": {
+    "reason": "Stage each native normalized event before the inherited 10,000-event cache truncates it.",
+    "insertions": [
+      {
+        "before_line": 95,
+        "text": "\tif s.history != nil {\n\t\ts.history.stageLocked(s, m, event)\n\t}\n"
+      }
+    ]
+  },
+  "internal/service/media_transfer.go": {
+    "reason": "Resolve retained native media descriptors from encrypted history when no longer present in the native cache; preserve the original native downloader and its validation.",
+    "insertions": [
+      {
+        "before_line": 171,
+        "text": "\t}\n\tif s.history != nil {\n\t\tif description, peer, found, err := s.history.mediaDescriptionLocked(s, session, message); found || err != nil {\n\t\t\treturn description, peer, err\n\t\t}\n"
+      }
+    ]
+  },
+  "internal/service/login.go": {
+    "reason": "Save the pre-first-Sync QR cursor as a recoverable session anchor before history commit, then route adoption through the history-first save path. Preserve default login behavior without history.",
+    "insertions": [
+      {
+        "before_line": 219,
+        "text": "\t\t\tif s.history != nil {\n\t\t\t\tclient.SavedCursor = bytes.Clone(client.State.Cursor)\n\t\t\t}\n"
+      },
+      {
+        "before_line": 390,
+        "text": "\tif s.history != nil {\n\t\treturn s.adoptHistoryLoginLocked(client, result, &copyData, cp)\n\t}\n"
+      }
+    ]
+  }
+}

@@ -127,6 +127,9 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		return fail(1500, "request_cancelled")
 	}
 	snap := r.Channel.Snapshot()
+	if snap.Error != "" {
+		return fail(1500, "runtime_storage_unavailable")
+	}
 	var self int64
 	var err error
 	if _, provided := q.Params["self_id"]; provided {

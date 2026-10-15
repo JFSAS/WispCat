@@ -10,6 +10,7 @@ if [ -n "$(ip -o address show scope global)$(ip route show)$(ip -6 route show de
   exit 1
 fi
 python3 tools/check_baseline.py
+python3 tools/test-baseline-checker.py
 ip -brief address
 ip route show
 go version

@@ -39,9 +39,11 @@ func TestArchiveManagementAuthenticationAndOwnership(t *testing.T) {
 		code                      int
 	}{
 		{"GET", "/accounts/first/archive", "", "", 401},
+		{"GET", "/accounts/first/history", "", "", 401},
 		{"POST", "/accounts/first/archive/compact", "{}", "", 401},
 		{"GET", "/accounts/first/archive", "", "synthetic-admin-token", 200},
 		{"GET", "/accounts/second/archive", "", "synthetic-admin-token", 200},
+		{"GET", "/accounts/first/history", "", "synthetic-admin-token", 200},
 		{"POST", "/accounts/first/archive/compact", `{"unexpected":true}`, "synthetic-admin-token", 400},
 		// No account has logged in. Compaction must report unavailable and must
 		// not attempt to acquire a session or start protocol work.
@@ -57,6 +59,9 @@ func TestArchiveManagementAuthenticationAndOwnership(t *testing.T) {
 			t.Fatal(tc.method, tc.path, response.Code, response.Body.String())
 		}
 		if tc.code == 200 {
+			if strings.HasSuffix(tc.path, "/history") && !strings.Contains(response.Body.String(), `"format":"encrypted_event_history_v1"`) {
+				t.Fatal("missing history diagnostics", response.Body.String())
+			}
 			var stats struct {
 				Archive struct {
 					Batches uint64 `json:"archived_batches"`
@@ -85,6 +90,9 @@ func TestArchiveManagementAuthenticationAndOwnership(t *testing.T) {
 	for _, account := range h.accounts {
 		if _, err := account.bot.ArchiveStatus(); err == nil {
 			t.Fatal("host shutdown left delivery archive open")
+		}
+		if _, err := account.bot.HistoryStatus(); err == nil {
+			t.Fatal("host shutdown left event history open")
 		}
 	}
 	next, err := New(cfg)

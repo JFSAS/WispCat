@@ -52,6 +52,9 @@ func (s *Server) RunPost(parent context.Context, cfg PostConfig) (runErr error) 
 			return nil
 		}
 		snap := s.Runtime.Channel.Snapshot()
+		if snap.Error != "" {
+			return bot.ErrStorage
+		}
 		if snap.Account == "" {
 			s.status(cfg.Name, "httpClient", "waiting_account", "", false)
 			if !waitContext(ctx, time.Second) {

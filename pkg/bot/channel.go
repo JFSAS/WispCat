@@ -32,6 +32,7 @@ type Roster struct {
 	Source   string `json:"source"`
 }
 type Snapshot struct {
+	Error       string `json:"error_category,omitempty"`
 	Account     string `json:"account_id"`
 	Self        User   `json:"self"`
 	Online      bool   `json:"online"`

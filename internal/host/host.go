@@ -72,6 +72,7 @@ func New(c Config) (*Host, error) {
 	h.token, _ = token(c.TokenEnv)
 	cleanup := func(err error) (*Host, error) {
 		for _, a := range h.accounts {
+			_ = a.bot.CloseHistory()
 			if a.bot.Archive != nil {
 				_ = a.bot.Archive.Close()
 			}
@@ -126,11 +127,22 @@ func New(c Config) (*Host, error) {
 		}
 		channel := service.New(p.Directory, time.Second, p.App)
 		bot := service.BotAdapter{Service: channel, Archive: archive}
+		history, e := service.OpenEventHistory(p.Directory)
+		if e != nil {
+			_ = archive.Close()
+			return cleanup(e)
+		}
+		if e = bot.EnableHistory(history); e != nil {
+			_ = history.Close()
+			_ = archive.Close()
+			return cleanup(e)
+		}
 		state := shared
 		secret, _ := token(a.TokenEnv)
 		adapter := onebot.NewServer(onebot.New(bot, state), secret, "")
 		settings, e := openConnectionSettings(p.Directory, c, a)
 		if e != nil {
+			_ = history.Close()
 			_ = archive.Close()
 			return cleanup(e)
 		}
@@ -284,6 +296,9 @@ func (h *Host) shutdown() {
 	// process to start while old protocol work is still in flight.
 	h.wg.Wait()
 	for _, a := range h.accounts {
+		if err := a.bot.CloseHistory(); err != nil {
+			failures = append(failures, err)
+		}
 		if a.bot.Archive != nil {
 			if err := a.bot.Archive.Close(); err != nil {
 				failures = append(failures, err)
@@ -394,6 +409,13 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			status, err := a.bot.ArchiveStatus()
 			if err != nil {
 				reply(503, map[string]string{"error": "delivery_archive_unavailable"})
+				return
+			}
+			reply(200, status)
+		case "history":
+			status, err := a.bot.HistoryStatus()
+			if err != nil {
+				reply(503, map[string]string{"error": "event_history_unavailable"})
 				return
 			}
 			reply(200, status)

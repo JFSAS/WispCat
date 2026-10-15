@@ -55,6 +55,7 @@ type Service struct {
 	login                         loginAttempt
 	loginFactory                  func() (loginEngine, error)
 	loginValidate                 func(context.Context, *protocol.Client) (protocol.SyncResult, error)
+	history                       *EventHistory // optional independent runtime persistence
 }
 
 // Reserve a distinct epoch range for each runtime, including instances with
@@ -163,6 +164,11 @@ func (s *Service) saveLocked() error {
 		// A first login that has not produced keys must not leave an invalid
 		// checkpoint that prevents the next official-login import.
 		return nil
+	}
+	if s.history != nil {
+		if err := s.history.persistLocked(s); err != nil {
+			return err
+		}
 	}
 	err := s.checkpoint.Save(s.data)
 	if err == nil {

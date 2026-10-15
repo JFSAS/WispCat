@@ -92,6 +92,9 @@ func (s *Service) appendEventLocked(key string, m protocol.Message) {
 	}
 	s.data.EventSequence++
 	event.Sequence = s.data.EventSequence
+	if s.history != nil {
+		s.history.stageLocked(s, m, event)
+	}
 	s.data.Events = append(s.data.Events, event)
 	if len(s.data.Events) > 10000 {
 		s.data.Events = s.data.Events[len(s.data.Events)-10000:]

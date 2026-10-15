@@ -169,6 +169,11 @@ func (s *Service) mediaDescriptionLocked(session, message string) (media.Descrip
 	if !s.mediaScopeLocked() {
 		return media.Descriptor{}, nil, ErrMediaUnavailable
 	}
+	if s.history != nil {
+		if description, peer, found, err := s.history.mediaDescriptionLocked(s, session, message); found || err != nil {
+			return description, peer, err
+		}
+	}
 	peer, ok := s.peersLocked()[session]
 	if !ok {
 		return media.Descriptor{}, nil, ErrMediaUnavailable

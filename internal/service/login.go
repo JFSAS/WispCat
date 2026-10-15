@@ -216,6 +216,9 @@ func (s *Service) workLogin(ctx context.Context) time.Duration {
 		candidate, err = engine.Authenticate(ctx)
 		if err == nil {
 			client = &protocol.Client{Bootstrap: candidate.Bootstrap, State: candidate, Roots: filepath.Join(s.directory, "runtime", "production-roots.pem")}
+			if s.history != nil {
+				client.SavedCursor = bytes.Clone(client.State.Cursor)
+			}
 			if s.loginValidate != nil {
 				result, err = s.loginValidate(ctx, client)
 			} else {
@@ -387,6 +390,9 @@ func (s *Service) adoptLoginLocked(client *protocol.Client, result protocol.Sync
 	copyData.Session = cloneSession(client.State)
 	copyData.SessionInvalid = false
 	cp := store.Checkpoint{Directory: filepath.Join(s.directory, "checkpoints"), Binding: binding}
+	if s.history != nil {
+		return s.adoptHistoryLoginLocked(client, result, &copyData, cp)
+	}
 	if err := cp.Save(&copyData); err != nil {
 		return &protocol.Error{Category: "checkpoint_save_failed"}
 	}

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JFSAS/wechat-runtime/pkg/bot"
 	"github.com/gorilla/websocket"
 )
 
@@ -159,7 +160,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		if s.Runtime.Channel.Snapshot().Account == "" {
+		snapshot := s.Runtime.Channel.Snapshot()
+		if snapshot.Error != "" {
+			http.Error(w, "runtime_storage_unavailable", 503)
+			return
+		}
+		if snapshot.Account == "" {
 			http.Error(w, "account_unavailable", 409)
 			return
 		}
@@ -281,6 +287,12 @@ func (s *Server) serveConn(parent context.Context, c *websocket.Conn, role, cons
 	defer cancel()
 	writer := &socketWriter{conn: c}
 	snap := s.Runtime.Channel.Snapshot()
+	if snap.Error != "" {
+		if consumer != "" {
+			s.status(consumer, "wsClient", "degraded", "runtime_storage_unavailable", false)
+		}
+		return
+	}
 	if snap.Account == "" {
 		return
 	}
@@ -459,6 +471,9 @@ func (s *Server) RunReverse(ctx context.Context, cfg ReverseConfig) (runErr erro
 			return nil
 		}
 		snap := s.Runtime.Channel.Snapshot()
+		if snap.Error != "" {
+			return bot.ErrStorage
+		}
 		if snap.Account == "" {
 			s.status(cfg.Name, "wsClient", "waiting_account", "", false)
 			if !waitContext(ctx, time.Second) {

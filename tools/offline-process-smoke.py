@@ -68,11 +68,13 @@ def main():
                     for counter in ['auth_calls', 'sync_calls', 'send_calls']:
                         assert status[counter] == 0, status
                     assert status['connection']['disk_read'] == 'not_attempted', status
+                    history = get(base + '/accounts/' + row['name'] + '/history', env['FIXTURE_ADMIN_TOKEN'])
+                    assert history['format'] == 'encrypted_event_history_v1' and history['messages'] == 0 and history['cursor'] == 0, history
                     response = get('http://' + row['onebot_address'] + '/get_status', env['FIXTURE_BOT_TOKEN'])
                     assert response['retcode'] == 0 and response['data']['online'] is False, response
                     summaries.append({'name': row['name'], 'mode': status['mode'],
                         **{key: status[key] for key in ['auth_calls', 'sync_calls', 'send_calls']},
-                        'disk_read': status['connection']['disk_read'], 'onebot_status': response['data']})
+                        'disk_read': status['connection']['disk_read'], 'onebot_status': response['data'], 'history': history})
                 process.send_signal(signal.SIGTERM)
                 assert process.wait(timeout=10) == 0, log.read_text()
                 result = {'result': 'pass', 'system': platform.system(), 'machine': platform.machine(),

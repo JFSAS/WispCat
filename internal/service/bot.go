@@ -50,6 +50,14 @@ func (a BotAdapter) Snapshot() bot.Snapshot {
 	if len(s.data.Events) > 0 {
 		v.FirstCursor = s.data.Events[0].Sequence - 1
 	}
+	if s.history != nil {
+		stats, err := s.history.Stats(s.data.Binding)
+		if err != nil {
+			v.Online, v.Error = false, "event_history_unavailable"
+			return v
+		}
+		v.Cursor, v.FirstCursor = stats.Cursor, stats.FirstCursor
+	}
 	return v
 }
 func (a BotAdapter) Conversations() []bot.Conversation {
@@ -160,6 +168,20 @@ func (a BotAdapter) Events(account string, after uint64, limit int) ([]bot.Event
 	if !s.mediaScopeLocked() || account != s.data.Binding {
 		return nil, bot.ErrScope
 	}
+	if s.history != nil {
+		rows, err := s.history.events(account, after, limit)
+		if err != nil {
+			return nil, err
+		}
+		events := make([]bot.Event, 0, len(rows))
+		for i := range rows {
+			if err := a.historyEchoLocked(&rows[i]); err != nil {
+				return nil, err
+			}
+			events = append(events, rows[i].Event)
+		}
+		return events, nil
+	}
 	if after > s.persistedSequence || len(s.data.Events) > 0 && after < s.data.Events[0].Sequence-1 {
 		return nil, bot.ErrCursor
 	}
@@ -199,6 +221,18 @@ func (a BotAdapter) Message(account, id string) (bot.Event, error) {
 	defer s.mu.RUnlock()
 	if !s.mediaScopeLocked() || account != s.data.Binding {
 		return bot.Event{}, bot.ErrScope
+	}
+	if s.history != nil {
+		row, err := s.history.message(account, id)
+		if err != nil {
+			return bot.Event{}, err
+		}
+		if row != nil {
+			if err := a.historyEchoLocked(row); err != nil {
+				return bot.Event{}, err
+			}
+			return row.Event, nil
+		}
 	}
 	for _, m := range s.data.Messages {
 		if messageKey(m, s.data.Session.Bootstrap.Username) == id {

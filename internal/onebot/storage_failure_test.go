@@ -3,9 +3,12 @@ package onebot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/JFSAS/wechat-runtime/pkg/bot"
@@ -81,5 +84,38 @@ func TestArchiveStorageFailuresRemainObservableAcrossOneBotInterfaces(t *testing
 	s.ServeHTTP(response, request)
 	if response.Code != 503 || strings.TrimSpace(response.Body.String()) != "runtime_storage_unavailable" {
 		t.Fatal(response.Code, response.Body.String())
+	}
+}
+
+func TestStorageSnapshotFailurePrecedesConnectionAndCursorEffects(t *testing.T) {
+	r, c := fixture(t)
+	c.snap.Error = "event_history_unavailable"
+	response := invoke(t, r, "get_status", `{}`)
+	if response.Retcode != 1500 || response.Message != "runtime_storage_unavailable" {
+		t.Fatal(response)
+	}
+	var requests atomic.Int32
+	peer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
+	defer peer.Close()
+	s := NewServer(r, strings.Repeat("t", 32), "127.0.0.1:12345")
+	defer s.Close(context.Background())
+	q := httptest.NewRequest("GET", "http://127.0.0.1:12345/ws", nil)
+	q.Header.Set("Authorization", "Bearer "+s.Token)
+	q.Header.Set("Upgrade", "websocket")
+	q.Header.Set("Connection", "Upgrade")
+	output := httptest.NewRecorder()
+	s.ServeHTTP(output, q)
+	if output.Code != 503 {
+		t.Fatal(output.Code, output.Body.String())
+	}
+	if err := s.RunPost(context.Background(), PostConfig{Name: "post", URL: peer.URL}); !errors.Is(err, bot.ErrStorage) {
+		t.Fatal(err)
+	}
+	if err := s.RunReverse(context.Background(), ReverseConfig{Name: "reverse", URL: strings.Replace(peer.URL, "http:", "ws:", 1), Role: "Universal"}); !errors.Is(err, bot.ErrStorage) {
+		t.Fatal(err)
+	}
+	stats, err := r.State.Stats()
+	if err != nil || stats.Cursors != 0 || stats.Identities != 0 || requests.Load() != 0 {
+		t.Fatal("unavailable history advanced a consumer or connected", stats, requests.Load(), err)
 	}
 }
