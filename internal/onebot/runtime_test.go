@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -91,6 +92,22 @@ func (c *fakeChannel) Submit(ctx context.Context, q bot.Send) (bot.Delivery, err
 		state = "queued"
 	}
 	d := bot.Delivery{ID: q.Key, State: state, Conversation: q.Conversation, Text: q.Text, Time: time.Now().Unix()}
+	if len(q.Outputs) > 0 {
+		parts := []bot.Delivery{}
+		for i, out := range q.Outputs {
+			part := bot.Delivery{ID: q.Key, State: state, Conversation: q.Conversation, Text: out.Text, Time: d.Time}
+			if i > 0 {
+				part.ID = q.Key + "/" + strconv.Itoa(i)
+			}
+			if out.Upload != nil {
+				part.Message = []bot.Segment{{Type: out.Upload.Kind, Data: map[string]string{"file": part.ID + "/cache"}}}
+			}
+			parts = append(parts, part)
+			c.deliveries[part.ID] = part
+		}
+		d = parts[0]
+		d.Parts = parts
+	}
 	c.deliveries[d.ID] = d
 	return d, nil
 }

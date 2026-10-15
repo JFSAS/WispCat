@@ -3,12 +3,8 @@ package onebot
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -59,13 +55,13 @@ func (r *Runtime) Actions() []Action {
 		{"get_version_info", "Runtime and protocol versions", true, nil}, {"get_status", "Channel connection status", true, nil}, {"get_login_info", "Current mapped account identity", true, nil},
 		{"get_friend_list", "Known private contacts (cached)", true, nil}, {"get_group_list", "Known groups (cached)", true, nil}, {"get_group_info", "Cached group information", true, []string{"group_id"}},
 		{"get_stranger_info", "Known user information", true, []string{"user_id"}}, {"get_msg", "Read an observed message or delivery", true, []string{"message_id"}},
-		{"send_msg", "Send text, mentions or one supplied image/file", false, []string{"message"}}, {"send_private_msg", "Send a private message", false, []string{"user_id", "message"}}, {"send_group_msg", "Send a group message", false, []string{"group_id", "message"}},
+		{"send_msg", "Send text, mentions and bounded image/file parts", false, []string{"message"}}, {"send_private_msg", "Send a private message", false, []string{"user_id", "message"}}, {"send_group_msg", "Send a group message", false, []string{"group_id", "message"}},
 		{"get_image", "Download a received image and resolve a bounded media URL", true, []string{"file"}},
 		{"can_send_image", "Image submission capability", true, nil}, {"can_send_record", "Voice submission capability", true, nil}, {"wechat_get_capabilities", "Declared compatibility limits", true, nil}, {"wechat_get_delivery", "Read durable delivery status", true, []string{"delivery_id"}},
 	} {
 		p := map[string]any{}
 		for _, name := range []string{"user_id", "group_id", "message_id"} {
-			p[name] = map[string]any{"anyOf": []any{map[string]any{"type": "integer", "minimum": 1}, map[string]any{"type": "string", "pattern": "^[1-9][0-9]*$"}}}
+			p[name] = map[string]any{"anyOf": []any{map[string]any{"type": "integer", "minimum": 1, "maximum": 2147483647}, map[string]any{"type": "string", "pattern": "^[1-9][0-9]*$"}}}
 		}
 		p["message"] = map[string]any{"anyOf": []any{map[string]any{"type": "string"}, map[string]any{"type": "array", "items": map[string]any{"type": "object", "required": []string{"type", "data"}}}}}
 		p["auto_escape"] = map[string]any{"type": "boolean"}
@@ -73,7 +69,20 @@ func (r *Runtime) Actions() []Action {
 		p["file"] = map[string]any{"type": "string"}
 		p["delivery_id"] = map[string]any{"type": "string"}
 		p["wechat_request_id"] = map[string]any{"type": "string", "maxLength": 128}
-		schema := map[string]any{"type": "object", "properties": p}
+		names := append([]string(nil), v.required...)
+		switch v.name {
+		case "send_msg":
+			names = []string{"message", "message_type", "user_id", "group_id", "auto_escape", "wechat_request_id"}
+		case "send_private_msg":
+			names = []string{"message", "user_id", "auto_escape", "wechat_request_id"}
+		case "send_group_msg":
+			names = []string{"message", "group_id", "auto_escape", "wechat_request_id"}
+		}
+		properties := map[string]any{}
+		for _, name := range names {
+			properties[name] = p[name]
+		}
+		schema := map[string]any{"type": "object", "properties": properties}
 		if len(v.required) > 0 {
 			schema["required"] = v.required
 		}
@@ -90,6 +99,12 @@ func (r *Runtime) known(action string) bool {
 	return false
 }
 func (r *Runtime) Invoke(ctx context.Context, q Request) Response {
+	limit := r.ActionTimeout
+	if limit <= 0 {
+		limit = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
 	out := r.invoke(ctx, q)
 	out.Echo = q.Echo
 	return out
@@ -109,7 +124,7 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		return good(map[string]any{"online": snap.Online, "good": snap.Online, "wechat_state": snap.State})
 	}
 	if q.Action == "wechat_get_capabilities" {
-		return good(map[string]any{"platform": "wechat", "actions": r.Actions(), "segments": []string{"text", "at", "image", "file"}, "media_input": "base64 or HTTP(S); single image/file per send", "member_list_complete": false, "event_acknowledgement": false, "unsupported": []string{"reply segment", "recall", "voice send", "group administration", "friend approval"}})
+		return good(map[string]any{"platform": "wechat", "actions": r.Actions(), "segments": []string{"text", "at", "image", "file"}, "media_input": "base64 or HTTP(S); up to 20 ordered native messages, 16MiB total media", "member_list_complete": false, "event_acknowledgement": false, "unsupported": []string{"reply segment", "recall", "voice send", "group administration", "friend approval"}})
 	}
 	if q.Action == "can_send_image" {
 		return good(map[string]bool{"yes": true})
@@ -196,7 +211,26 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 			if e != nil {
 				return fail(100, "message_unavailable")
 			}
-			return good(map[string]any{"message_id": id, "real_id": id, "time": d.Time, "message_type": "private", "sender": map[string]any{"user_id": self, "nickname": snap.Self.Name}, "message": []bot.Segment{{Type: "text", Data: map[string]string{"text": d.Text}}}, "wechat_delivery_state": d.State})
+			conversation := bot.Conversation{ID: d.Conversation, Kind: "private"}
+			for _, c := range r.Channel.Conversations() {
+				if c.ID == d.Conversation {
+					conversation = c
+					break
+				}
+			}
+			message := d.Message
+			if len(message) == 0 {
+				message = []bot.Segment{{Type: "text", Data: map[string]string{"text": d.Text}}}
+			}
+			v, e := r.Convert(bot.Event{ID: ref.Key, Account: snap.Account, Conversation: conversation, Sender: snap.Self, Time: d.Time, Message: message, Own: true})
+			if e != nil {
+				return fail(1500, "message_conversion_failed")
+			}
+			v["real_id"] = id
+			v["wechat_delivery_state"] = d.State
+			delete(v, "post_type")
+			delete(v, "self_id")
+			return good(v)
 		}
 		ev, e := r.Channel.Message(snap.Account, ref.Key)
 		if e != nil {
@@ -313,73 +347,9 @@ func (r *Runtime) send(ctx context.Context, q Request, snap bot.Snapshot) Respon
 	if !exists {
 		return fail(100, "target_unavailable")
 	}
-	auto, err := paramBool(q.Params, "auto_escape")
-	if err != nil {
-		return fail(1400, "invalid_auto_escape")
-	}
-	segments, err := parseMessage(q.Params["message"], auto)
+	req, err := r.prepareSend(ctx, q.Params, snap, ref.Key, group)
 	if err != nil {
 		return fail(1400, err.Error())
-	}
-	req := bot.Send{Account: snap.Account, Epoch: snap.Epoch, Conversation: ref.Key}
-	for _, seg := range segments {
-		switch seg.Type {
-		case "text":
-			req.Text += seg.Data["text"]
-		case "at":
-			if !group {
-				return fail(1400, "mention_requires_group")
-			}
-			n, e := strconv.ParseInt(seg.Data["qq"], 10, 64)
-			if e != nil {
-				return fail(1400, "invalid_mention")
-			}
-			u, ok := r.State.resolve(snap.Account, "user", n)
-			if !ok {
-				return fail(100, "mention_unavailable")
-			}
-			req.Mentions = append(req.Mentions, u.Key)
-		case "image", "file":
-			if req.Upload != nil {
-				return fail(1400, "multiple_media_not_supported")
-			}
-			file := seg.Data["file"]
-			var data []byte
-			var e error
-			if strings.HasPrefix(file, "base64://") {
-				data, e = base64.StdEncoding.DecodeString(strings.TrimPrefix(file, "base64://"))
-			} else {
-				data, e = fetchMedia(ctx, file)
-			}
-			if e != nil || len(data) == 0 || len(data) > 16<<20 {
-				return fail(1400, "invalid_media")
-			}
-			name := seg.Data["name"]
-			if name == "" {
-				if seg.Type == "image" {
-					name = "image.png"
-				} else {
-					name = "file.bin"
-				}
-			}
-			req.Upload = &bot.Upload{Kind: seg.Type, Name: name, Data: data}
-		default:
-			return fail(1400, "unsupported_segment_"+seg.Type)
-		}
-	}
-	if req.Upload != nil && (req.Text != "" || len(req.Mentions) > 0) {
-		return fail(1400, "mixed_media_not_supported")
-	}
-	if raw, ok := q.Params["wechat_request_id"]; ok {
-		if json.Unmarshal(raw, &req.Key) != nil || req.Key == "" || len(req.Key) > 128 {
-			return fail(1400, "invalid_wechat_request_id")
-		}
-	} else {
-		random := make([]byte, 16)
-		if _, err = rand.Read(random); err != nil {
-			return fail(1500, "random_unavailable")
-		}
-		req.Key = hex.EncodeToString(random)
 	}
 	d, err := r.Channel.Submit(ctx, req)
 	if err != nil {
@@ -402,20 +372,34 @@ func (r *Runtime) send(ctx context.Context, q Request, snap bot.Snapshot) Respon
 	for {
 		switch d.State {
 		case "accepted", "echo_observed":
-			mid, e := r.State.ID(snap.Account, "message", "delivery/"+d.ID)
-			if e != nil {
-				return fail(1500, "state_unavailable")
+			parts := d.Parts
+			if len(parts) == 0 {
+				parts = []bot.Delivery{d}
 			}
-			return good(map[string]any{"message_id": mid, "wechat_delivery_id": d.ID, "wechat_request_id": req.Key})
+			messageIDs := []int64{}
+			deliveryIDs := []string{}
+			for _, part := range parts {
+				messageKey := part.MessageID
+				if messageKey == "" {
+					messageKey = "delivery/" + part.ID
+				}
+				mid, e := r.State.ID(snap.Account, "message", messageKey)
+				if e != nil {
+					return fail(1500, "state_unavailable")
+				}
+				messageIDs = append(messageIDs, mid)
+				deliveryIDs = append(deliveryIDs, part.ID)
+			}
+			return good(map[string]any{"message_id": messageIDs[0], "wechat_message_ids": messageIDs, "wechat_delivery_id": d.ID, "wechat_delivery_ids": deliveryIDs, "wechat_request_id": req.Key})
 		case "failed", "unknown", "cancelled":
 			v := fail(100, "delivery_"+d.State)
-			v.Data = map[string]any{"wechat_delivery_id": d.ID, "wechat_request_id": req.Key}
+			v.Data = map[string]any{"wechat_delivery_id": d.ID, "wechat_request_id": req.Key, "wechat_parts": d.Parts}
 			return v
 		}
 		select {
 		case <-wait.Done():
 			v := fail(100, "delivery_pending_or_unknown")
-			v.Data = map[string]any{"wechat_delivery_id": d.ID, "wechat_request_id": req.Key}
+			v.Data = map[string]any{"wechat_delivery_id": d.ID, "wechat_request_id": req.Key, "wechat_parts": d.Parts}
 			return v
 		case <-tick.C:
 		}
@@ -509,7 +493,6 @@ func (r *Runtime) Convert(ev bot.Event) (map[string]any, error) {
 		return nil, err
 	}
 	segments := []bot.Segment{}
-	var raw strings.Builder
 	for _, s := range ev.Message {
 		data := map[string]string{}
 		for k, v := range s.Data {
@@ -533,18 +516,14 @@ func (r *Runtime) Convert(ev bot.Event) (map[string]any, error) {
 				data["url"] = r.MediaURL(ev.Account, ev.Conversation.ID, source)
 			}
 		}
-		if s.Type == "text" {
-			raw.WriteString(data["text"])
-		} else {
-			raw.WriteString(fmt.Sprintf("[%s]", s.Type))
-		}
+
 		segments = append(segments, bot.Segment{Type: s.Type, Data: data})
 	}
 	kind, sub := "private", "friend"
 	if ev.Conversation.Kind == "group" {
 		kind, sub = "group", "normal"
 	}
-	v := map[string]any{"time": ev.Time, "self_id": self, "post_type": "message", "message_type": kind, "sub_type": sub, "message_id": mid, "user_id": sender, "message": segments, "raw_message": raw.String(), "font": 0, "sender": map[string]any{"user_id": sender, "nickname": ev.Sender.Name, "sex": "unknown", "age": 0}, "wechat_event_id": ev.ID, "wechat_sequence": ev.Sequence}
+	v := map[string]any{"time": ev.Time, "self_id": self, "post_type": "message", "message_type": kind, "sub_type": sub, "message_id": mid, "user_id": sender, "message": segments, "raw_message": renderCQ(segments), "font": 0, "sender": map[string]any{"user_id": sender, "nickname": ev.Sender.Name, "sex": "unknown", "age": 0}, "wechat_event_id": ev.ID, "wechat_sequence": ev.Sequence}
 	if kind == "group" {
 		n, e := r.State.ID(ev.Account, "group", ev.Conversation.ID)
 		if e != nil {

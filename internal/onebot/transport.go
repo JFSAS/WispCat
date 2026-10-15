@@ -121,6 +121,15 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		http.Error(w, "runtime_stopping", 503)
+		return
+	}
+	s.wg.Add(1)
+	s.mu.Unlock()
+	defer s.wg.Done()
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.URL.Path == "/_media" {
@@ -272,7 +281,7 @@ func (s *Server) serveConn(parent context.Context, c *websocket.Conn, role, cons
 		return
 	}
 	cursor := snap.Cursor
-	if consumer != "" {
+	if consumer != "" && role != "API" {
 		cursor = s.Runtime.State.cursor(snap.Account, consumer, snap.Cursor)
 		if err = s.Runtime.State.setCursor(snap.Account, consumer, cursor); err != nil {
 			return
@@ -398,7 +407,7 @@ func (s *Server) serveConn(parent context.Context, c *websocket.Conn, role, cons
 		}
 	}
 }
-func (s *Server) RunReverse(ctx context.Context, cfg ReverseConfig) error {
+func (s *Server) RunReverse(ctx context.Context, cfg ReverseConfig) (runErr error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stop := context.AfterFunc(s.shutdown, cancel)
@@ -422,7 +431,7 @@ func (s *Server) RunReverse(ctx context.Context, cfg ReverseConfig) error {
 	s.wg.Add(1)
 	s.mu.Unlock()
 	defer s.wg.Done()
-	defer s.status(cfg.Name, "wsClient", "stopped", "", false)
+	defer func() { s.finish(cfg.Name, "wsClient", runErr) }()
 	delay := time.Second
 	for {
 		if ctx.Err() != nil {

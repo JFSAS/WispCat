@@ -53,6 +53,11 @@ type Upload struct {
 	Kind, Name string
 	Data       []byte
 }
+type Output struct {
+	Text     string
+	Mentions []string
+	Upload   *Upload
+}
 type Send struct {
 	Account      string
 	Epoch        uint64
@@ -61,14 +66,18 @@ type Send struct {
 	Text         string
 	Mentions     []string
 	Upload       *Upload
+	Outputs      []Output `json:"outputs,omitempty"`
 }
 type Delivery struct {
-	ID           string `json:"id"`
-	State        string `json:"state"`
-	Error        string `json:"error,omitempty"`
-	Conversation string `json:"conversation_id"`
-	Time         int64  `json:"time"`
-	Text         string `json:"text,omitempty"`
+	ID           string     `json:"id"`
+	MessageID    string     `json:"message_id,omitempty"`
+	Message      []Segment  `json:"message,omitempty"`
+	State        string     `json:"state"`
+	Error        string     `json:"error,omitempty"`
+	Conversation string     `json:"conversation_id"`
+	Time         int64      `json:"time"`
+	Text         string     `json:"text,omitempty"`
+	Parts        []Delivery `json:"parts,omitempty"`
 }
 type Content struct {
 	Data       []byte

@@ -18,34 +18,41 @@ import (
 	"time"
 
 	"github.com/JFSAS/wechat-runtime/internal/instances"
+	"github.com/JFSAS/wechat-runtime/internal/native"
 	"github.com/JFSAS/wechat-runtime/internal/onebot"
 	"github.com/JFSAS/wechat-runtime/internal/service"
 	"github.com/JFSAS/wechat-runtime/internal/store"
 )
 
 type accountRuntime struct {
-	config   Account
-	channel  *service.Service
-	adapter  *onebot.Server
-	listener net.Listener
-	http     *http.Server
+	config      Account
+	connections *connectionSettings
+	channel     *service.Service
+	adapter     *onebot.Server
+	listener    net.Listener
+	http        *http.Server
 }
 type Host struct {
-	config   Config
-	lock     *os.File
-	accounts []*accountRuntime
-	listener net.Listener
-	admin    *http.Server
-	token    string
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	mu       sync.Mutex
-	started  bool
-	closed   bool
+	config        Config
+	lock          *os.File
+	accounts      []*accountRuntime
+	listener      net.Listener
+	admin         *http.Server
+	token         string
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	mu            sync.Mutex
+	started       bool
+	closed        bool
+	requests      chan struct{}
+	shutdownDone  chan struct{}
+	shutdownError error
 }
 
 func New(c Config) (*Host, error) {
-	if err := c.Validate(); err != nil {
+	var err error
+	c, err = effectiveConfig(c)
+	if err != nil {
 		return nil, err
 	}
 	if err := store.Directory(c.StateDir); err != nil {
@@ -59,7 +66,7 @@ func New(c Config) (*Host, error) {
 		_ = lock.Close()
 		return nil, errors.New("state_root_in_use")
 	}
-	h := &Host{config: c, lock: lock}
+	h := &Host{config: c, lock: lock, requests: make(chan struct{}, 16)}
 	h.token, _ = token(c.TokenEnv)
 	cleanup := func(err error) (*Host, error) {
 		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
@@ -75,6 +82,9 @@ func New(c Config) (*Host, error) {
 		if e != nil {
 			return cleanup(e)
 		}
+		if e = service.RecoverBotIntents(p.Directory); e != nil {
+			return cleanup(e)
+		}
 		channel := service.New(p.Directory, time.Second, p.App)
 		state, e := onebot.OpenState(filepath.Join(p.Directory, "onebot"))
 		if e != nil {
@@ -82,7 +92,11 @@ func New(c Config) (*Host, error) {
 		}
 		secret, _ := token(a.TokenEnv)
 		adapter := onebot.NewServer(onebot.New(service.BotAdapter{Service: channel}, state), secret, "")
-		h.accounts = append(h.accounts, &accountRuntime{config: a, channel: channel, adapter: adapter})
+		settings, e := openConnectionSettings(p.Directory, c, a)
+		if e != nil {
+			return cleanup(e)
+		}
+		h.accounts = append(h.accounts, &accountRuntime{config: a, channel: channel, adapter: adapter, connections: settings})
 	}
 	return h, nil
 }
@@ -91,6 +105,22 @@ func (h *Host) Start(parent context.Context) error {
 	defer h.mu.Unlock()
 	if h.started || h.closed {
 		return errors.New("runtime_already_started_or_closed")
+	}
+	if parent.Err() != nil {
+		return parent.Err()
+	}
+	for _, a := range h.accounts {
+		if a.config.Mode == "online" && !native.Supported() {
+			return errors.New("native_transport_unavailable")
+		}
+	}
+	initial := map[*accountRuntime][]onebot.NetworkSpec{}
+	for _, a := range h.accounts {
+		plan, err := a.connections.specs(a.connections.saved)
+		if err != nil {
+			return err
+		}
+		initial[a] = plan
 	}
 	// Bind all listeners before starting any account. A bad topology cannot
 	// leave a partial set of live sessions behind.
@@ -115,34 +145,27 @@ func (h *Host) Start(parent context.Context) error {
 	ctx, cancel := context.WithCancel(parent)
 	h.cancel = cancel
 	h.started = true
-	h.admin = &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 16384}
-	h.wg.Add(1)
-	go func() { defer h.wg.Done(); _ = h.admin.Serve(listener) }()
+	h.admin = &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 16384}
 	for _, a := range h.accounts {
 		a.channel.EnableNativeMedia()
 		a.channel.Start(ctx, a.config.Mode)
 		h.wg.Add(1)
 		go func(a *accountRuntime) { defer h.wg.Done(); a.channel.Wait() }(a)
-		a.http = &http.Server{Handler: a.adapter, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 16384}
+		a.http = &http.Server{Handler: a.adapter, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 16384}
 		h.wg.Add(1)
 		go func(a *accountRuntime) { defer h.wg.Done(); _ = a.http.Serve(a.listener) }(a)
-		for _, p := range a.config.HTTPPost {
-			secret, _ := token(p.SecretEnv)
-			h.wg.Add(1)
-			go func(a *accountRuntime, p Post, secret string) {
-				defer h.wg.Done()
-				_ = a.adapter.RunPost(ctx, onebot.PostConfig{Name: p.Name, URL: p.URL, Secret: secret})
-			}(a, p, secret)
+		a.connections.manager = onebot.NewNetworkManager(a.adapter, ctx)
+		if err := a.connections.manager.Apply(ctx, initial[a]); err != nil {
+			cancel()
+			return err
 		}
-		for _, r := range a.config.Reverse {
-			secret, _ := token(r.TokenEnv)
-			h.wg.Add(1)
-			go func(a *accountRuntime, r Reverse, secret string) {
-				defer h.wg.Done()
-				_ = a.adapter.RunReverse(ctx, onebot.ReverseConfig{Name: r.Name, URL: r.URL, Token: secret, Role: r.Role})
-			}(a, r, secret)
-		}
+		a.connections.mu.Lock()
+		a.connections.active = a.connections.revision
+		a.connections.mu.Unlock()
+
 	}
+	h.wg.Add(1)
+	go func() { defer h.wg.Done(); _ = h.admin.Serve(listener) }()
 	return nil
 }
 func (h *Host) Address() string {
@@ -155,45 +178,88 @@ func (h *Host) Address() string {
 }
 func (h *Host) Close(ctx context.Context) error {
 	h.mu.Lock()
-	if h.closed {
-		h.mu.Unlock()
-		return nil
+	if h.shutdownDone == nil {
+		h.shutdownDone = make(chan struct{})
+		h.closed = true
+		go h.shutdown()
 	}
-	h.closed = true
-	started := h.started
-	cancel := h.cancel
+	done := h.shutdownDone
+	h.mu.Unlock()
+	select {
+	case <-done:
+		h.mu.Lock()
+		err := h.shutdownError
+		h.mu.Unlock()
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (h *Host) shutdown() {
+	h.mu.Lock()
+	started, cancel := h.started, h.cancel
 	h.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
+	ctx, stop := context.WithTimeout(context.Background(), 60*time.Second)
+	defer stop()
 	var failures []error
 	if started {
 		if err := h.admin.Shutdown(ctx); err != nil {
 			failures = append(failures, err)
 		}
+		if h.listener != nil {
+			_ = h.listener.Close()
+		}
 		for _, a := range h.accounts {
+			if a.connections.manager != nil {
+				if err := a.connections.manager.Close(ctx); err != nil {
+					failures = append(failures, err)
+				}
+			}
 			if err := a.adapter.Close(ctx); err != nil {
 				failures = append(failures, err)
 			}
-			if err := a.http.Shutdown(ctx); err != nil {
-				failures = append(failures, err)
+			if a.http != nil {
+				if err := a.http.Shutdown(ctx); err != nil {
+					failures = append(failures, err)
+				}
+			}
+			if a.listener != nil {
+				_ = a.listener.Close()
+			}
+		}
+	} else {
+		if h.listener != nil {
+			_ = h.listener.Close()
+		}
+		for _, a := range h.accounts {
+			if a.listener != nil {
+				_ = a.listener.Close()
 			}
 		}
 	}
-	done := make(chan struct{})
-	go func() { h.wg.Wait(); close(done) }()
-	select {
-	case <-done:
-		if h.lock != nil {
-			_ = syscall.Flock(int(h.lock.Fd()), syscall.LOCK_UN)
-			_ = h.lock.Close()
-		}
-	case <-ctx.Done():
-		failures = append(failures, ctx.Err())
+	// A caller deadline does not abandon ownership cleanup or permit another
+	// process to start while old protocol work is still in flight.
+	h.wg.Wait()
+	if h.lock != nil {
+		_ = syscall.Flock(int(h.lock.Fd()), syscall.LOCK_UN)
+		_ = h.lock.Close()
 	}
-	return errors.Join(failures...)
+	h.mu.Lock()
+	h.shutdownError = errors.Join(failures...)
+	close(h.shutdownDone)
+	h.mu.Unlock()
 }
 func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	select {
+	case h.requests <- struct{}{}:
+		defer func() { <-h.requests }()
+	default:
+		http.Error(w, "management_concurrency_limit", 503)
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.Host != h.Address() {
@@ -257,6 +323,8 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			w.Header().Set("Content-Type", "image/png")
 			_, _ = w.Write(data)
+		case "connections":
+			reply(200, a.connections.view())
 		case "actions":
 			reply(200, a.adapter.Runtime.Actions())
 		case "deliveries":
@@ -270,8 +338,30 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(405, map[string]string{"error": "method_not_allowed"})
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 8192)
+	limit := int64(8192)
+	if action == "connections" {
+		limit = 64 << 10
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	defer r.Body.Close()
+	if action == "connections" {
+		var input struct {
+			Revision string         `json:"revision"`
+			Plan     connectionPlan `json:"plan"`
+		}
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if dec.Decode(&input) != nil || dec.Decode(new(any)) != io.EOF {
+			reply(400, map[string]string{"error": "invalid_connections_config"})
+			return
+		}
+		if err := a.connections.save(input.Revision, input.Plan); err != nil {
+			reply(409, map[string]string{"error": "connections_save_failed"})
+			return
+		}
+		reply(200, a.connections.view())
+		return
+	}
 	var body struct{}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -279,8 +369,16 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(400, map[string]string{"error": "expected_empty_json_object"})
 		return
 	}
+	if (action == "online" || action == "login/start" || action == "login/disk") && !native.Supported() {
+		reply(409, map[string]string{"error": "native_transport_unavailable"})
+		return
+	}
 	var err error
 	switch action {
+	case "connections/apply":
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		err = a.connections.apply(ctx)
 	case "online":
 		err = a.channel.SetMode("online", false)
 	case "offline":
@@ -305,6 +403,6 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 const managementPage = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>WeChat Runtime</title><style>body{max-width:960px;margin:40px auto;font:16px system-ui;background:#f6f7f9;color:#17212c}input,button{padding:10px;margin:5px}pre{background:white;padding:20px;white-space:pre-wrap}article{background:white;padding:20px;margin:15px 0;border-radius:8px}</style><h1>WeChat Runtime</h1><p>独立微信通道 · OneBot v11。Bot 和模型在外部进程运行。</p><input id="token" type="password" placeholder="管理令牌" autocomplete="off"><button id="refresh">刷新账号</button><main id="accounts"></main><script>
 const token=document.querySelector('#token'),out=document.querySelector('#accounts');
 async function call(path,method='GET'){const r=await fetch(path,{method,headers:{Authorization:'Bearer '+token.value,...(method==='POST'?{'Content-Type':'application/json'}:{})},...(method==='POST'?{body:'{}'}:{})});if(!r.ok)throw Error('HTTP '+r.status);return r.json()}
-async function refresh(){try{const rows=await call('/accounts');out.replaceChildren();for(const a of rows){const card=document.createElement('article'),title=document.createElement('h2'),pre=document.createElement('pre');title.textContent=a.name;pre.textContent=JSON.stringify(a,null,2);card.append(title,pre);for(const [name,action] of [['恢复缓存连接','online'],['离线','offline'],['申请二维码','login/start'],['取消扫码','login/cancel']]){const b=document.createElement('button');b.textContent=name;b.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/'+action,'POST');await refresh()}catch(e){alert(e.message)}};card.append(b)}const b=document.createElement('button');b.textContent='显示二维码';b.onclick=async()=>{try{const st=await call('/accounts/'+encodeURIComponent(a.name)+'/login');if(!st.image_ready)throw Error('二维码尚未就绪，请稍后刷新');const r=await fetch('/accounts/'+encodeURIComponent(a.name)+'/login/image?id='+encodeURIComponent(st.id),{headers:{Authorization:'Bearer '+token.value}});if(!r.ok)throw Error('二维码读取失败');const img=document.createElement('img'),url=URL.createObjectURL(await r.blob());img.width=240;img.onload=()=>URL.revokeObjectURL(url);img.src=url;card.append(img)}catch(e){alert(e.message)}};card.append(b);out.append(card)}}catch(e){out.textContent=e.message}}
+async function refresh(){try{const rows=await call('/accounts');out.replaceChildren();for(const a of rows){const card=document.createElement('article'),title=document.createElement('h2'),pre=document.createElement('pre');title.textContent=a.name;pre.textContent=JSON.stringify(a,null,2);card.append(title,pre);for(const [name,action] of [['恢复缓存连接','online'],['离线','offline'],['申请二维码','login/start'],['取消扫码','login/cancel']]){const b=document.createElement('button');b.textContent=name;b.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/'+action,'POST');await refresh()}catch(e){alert(e.message)}};card.append(b)}const b=document.createElement('button');b.textContent='显示二维码';b.onclick=async()=>{try{const st=await call('/accounts/'+encodeURIComponent(a.name)+'/login');if(!st.image_ready)throw Error('二维码尚未就绪，请稍后刷新');const r=await fetch('/accounts/'+encodeURIComponent(a.name)+'/login/image?id='+encodeURIComponent(st.id),{headers:{Authorization:'Bearer '+token.value}});if(!r.ok)throw Error('二维码读取失败');const img=document.createElement('img'),url=URL.createObjectURL(await r.blob());img.width=240;img.onload=()=>URL.revokeObjectURL(url);img.src=url;card.append(img)}catch(e){alert(e.message)}};card.append(b);const editor=document.createElement('textarea');editor.rows=12;editor.style.width='95%';const info=document.createElement('p');let revision='';async function loadConnections(){const state=await call('/accounts/'+encodeURIComponent(a.name)+'/connections');revision=state.revision;editor.value=JSON.stringify(state.saved,null,2);info.textContent=state.applied?'连接配置已应用':'已保存连接配置尚未应用'}const save=document.createElement('button');save.textContent='保存连接配置';save.onclick=async()=>{try{const plan=JSON.parse(editor.value);const response=await fetch('/accounts/'+encodeURIComponent(a.name)+'/connections',{method:'POST',headers:{Authorization:'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({revision,plan})});if(!response.ok)throw Error('保存失败：HTTP '+response.status);await loadConnections()}catch(e){alert(e.message)}};const apply=document.createElement('button');apply.textContent='应用已保存连接';apply.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/connections/apply','POST');await loadConnections()}catch(e){alert(e.message)}};card.append(info,editor,save,apply);out.append(card);await loadConnections()}}catch(e){out.textContent=e.message}}
 document.querySelector('#refresh').onclick=refresh;
 </script></html>`

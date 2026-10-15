@@ -5,14 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"net/http"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/JFSAS/wechat-runtime/internal/media"
 	"github.com/JFSAS/wechat-runtime/internal/messaging"
@@ -23,7 +20,10 @@ import (
 
 // BotAdapter adds normalized identities without changing the imported wire
 // implementation. A group sender and a direct contact share sessionID(username).
-type BotAdapter struct{ Service *Service }
+type BotAdapter struct {
+	Service *Service
+	persist func() error
+}
 
 func channelError(err error) error {
 	switch {
@@ -177,10 +177,53 @@ func (a BotAdapter) Message(account, id string) (bot.Event, error) {
 			return a.eventLocked(m, 0), nil
 		}
 	}
+	for deliveryID, job := range s.data.Jobs {
+		if job.ServerID == 0 || a.receiptMessageID(job) != id {
+			continue
+		}
+		delivery := a.deliveryLocked(deliveryID, job)
+		if delivery.MessageID == id {
+			return bot.Event{ID: id, Account: account, Conversation: bot.Conversation{ID: delivery.Conversation, Kind: conversationKind([]byte(job.Recipient)), Name: s.labelLocked([]byte(job.Recipient))}, Sender: bot.User{ID: s.sessionID(s.data.Session.Bootstrap.Username), Name: "WeChat"}, Time: delivery.Time, Message: delivery.Message, Own: true, LocalEcho: true}, nil
+		}
+	}
 	return bot.Event{}, bot.ErrNotFound
 }
+func conversationKind(peer []byte) string {
+	if protocol.IsGroup(peer) {
+		return "group"
+	}
+	if string(peer) == "filehelper" {
+		return "filehelper"
+	}
+	return "private"
+}
 func (a BotAdapter) deliveryLocked(id string, j *store.Job) bot.Delivery {
-	return bot.Delivery{ID: id, State: j.Status, Error: safeJobError(j), Conversation: a.Service.sessionID([]byte(j.Recipient)), Time: int64(j.CreateTime), Text: j.Content}
+	s := a.Service
+	d := bot.Delivery{ID: id, State: j.Status, Error: safeJobError(j), Conversation: s.sessionID([]byte(j.Recipient)), Time: int64(j.CreateTime), Text: j.Content}
+	if (j.Status == "accepted" || j.Status == "echo_observed") && j.ServerID == 0 {
+		d.State = "unknown"
+		d.Error = "message_receipt_missing"
+	}
+	if j.ServerID != 0 {
+		d.MessageID = a.receiptMessageID(j)
+	}
+	for _, m := range s.data.Messages {
+		if j.ServerID != 0 && m.ServerID == j.ServerID && string(m.Peer(s.data.Session.Bootstrap.Username)) == j.Recipient {
+			event := a.eventLocked(m, 0)
+			d.MessageID = event.ID
+			d.Message = event.Message
+			return d
+		}
+	}
+	if j.Media != nil {
+		d.Message = []bot.Segment{{Type: j.Kind, Data: map[string]string{"file": "outgoing:" + id + "/cache", "name": j.Media.Name}}}
+	} else {
+		d.Message = []bot.Segment{{Type: "text", Data: map[string]string{"text": j.Content}}}
+	}
+	return d
+}
+func (a BotAdapter) receiptMessageID(j *store.Job) string {
+	return messageKey(protocol.Message{Sender: a.Service.data.Session.Bootstrap.Username, Recipient: []byte(j.Recipient), ServerID: j.ServerID}, a.Service.data.Session.Bootstrap.Username)
 }
 func (a BotAdapter) Delivery(account, id string) (bot.Delivery, error) {
 	s := a.Service
@@ -193,132 +236,49 @@ func (a BotAdapter) Delivery(account, id string) (bot.Delivery, error) {
 	if j == nil {
 		return bot.Delivery{}, bot.ErrNotFound
 	}
+	for _, batch := range s.data.DeliveryBatches {
+		if len(batch.IDs) > 1 && batch.IDs[0] == id {
+			return a.batchLocked(batch.IDs)
+		}
+	}
 	return a.deliveryLocked(id, j), nil
 }
 
-func (a BotAdapter) Submit(ctx context.Context, r bot.Send) (bot.Delivery, error) {
-	if err := ctx.Err(); err != nil {
-		return bot.Delivery{}, err
-	}
-	if r.Key == "" || len(r.Key) > 160 || len(r.Mentions) > 20 || !utf8.ValidString(r.Text) || len(r.Text) > 4096 {
-		return bot.Delivery{}, errors.New("invalid_message")
-	}
-	if r.Upload != nil && (r.Text != "" || len(r.Mentions) > 0 || !safeUploadName(r.Upload.Name) || len(r.Upload.Data) == 0 || len(r.Upload.Data) > MaxMediaSendBytes || (r.Upload.Kind != "image" && r.Upload.Kind != "file")) {
-		return bot.Delivery{}, errors.New("invalid_upload")
-	}
-	if r.Upload == nil && strings.TrimSpace(r.Text) == "" {
-		return bot.Delivery{}, errors.New("empty_message")
-	}
-	logical := r
-	logical.Epoch = 0
-	encoded, _ := json.Marshal(logical)
-	digest := sha256.Sum256(encoded)
-	fingerprint := hex.EncodeToString(digest[:])
-	key := "bot/" + r.Key
-	s := a.Service
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return bot.Delivery{}, err
-	}
-	if !s.mediaScopeLocked() || r.Account != s.data.Binding {
-		return bot.Delivery{}, bot.ErrScope
-	}
-	if batch, ok := s.data.DeliveryBatches[key]; ok {
-		if batch.Fingerprint != fingerprint || len(batch.IDs) != 1 {
-			return bot.Delivery{}, bot.ErrConflict
-		}
-		j := s.data.Jobs[batch.IDs[0]]
-		if j == nil {
-			return bot.Delivery{}, bot.ErrNotFound
-		}
-		return a.deliveryLocked(batch.IDs[0], j), nil
-	}
-	if s.state != "connected" || s.mode != "online" || s.modeEpoch != r.Epoch || s.data.SessionInvalid {
-		return bot.Delivery{}, bot.ErrUnavailable
-	}
-	if len(s.data.Jobs) >= 10000 || len(s.data.DeliveryBatches) >= 10000 {
-		return bot.Delivery{}, errors.New("send_journal_full")
-	}
-	peer, ok := s.peersLocked()[r.Conversation]
-	if !ok {
-		return bot.Delivery{}, bot.ErrNotFound
-	}
-	var mentions []string
-	users := a.usersLocked()
-	for _, id := range r.Mentions {
-		user, ok := users[id]
-		if !ok {
-			return bot.Delivery{}, bot.ErrNotFound
-		}
-		mentions = append(mentions, s.groupMemberID(peer, user))
-	}
-	raw, prefix, err := s.resolveMentionsLocked(peer, mentions)
-	if err != nil {
-		return bot.Delivery{}, err
-	}
-	source, err := protocol.MentionSource(raw)
-	if err != nil {
-		return bot.Delivery{}, err
-	}
-	text := prefix + r.Text
-	if len(text) > 4096 {
-		return bot.Delivery{}, errors.New("message_too_long")
-	}
-	oldNext := s.data.NextClientID
-	var id string
-	var job *store.Job
-	if r.Upload != nil {
-		mime := http.DetectContentType(r.Upload.Data)
-		if r.Upload.Kind == "image" {
-			info, e := media.ValidateImage(r.Upload.Data)
-			if e != nil {
-				return bot.Delivery{}, e
-			}
-			mime = info.MIME
-		}
-		id, job, err = s.stageMediaSendLocked(peer, r.Upload.Kind, r.Upload.Name, mime, r.Upload.Data)
-		if err != nil {
-			return bot.Delivery{}, err
-		}
-	} else {
-		random, e := protocol.Random(16)
-		if e != nil {
-			return bot.Delivery{}, e
-		}
-		id = hex.EncodeToString(random)
-		n := s.data.NextClientID
-		if n == 0 {
-			n = 1
-		}
-		job = &store.Job{Recipient: string(peer), Content: text, Source: source, ClientID: n, CreateTime: uint32(time.Now().Unix()), Status: "queued"}
-		s.data.NextClientID = n%0x7fffffff + 1
-	}
-	job.Origin = "onebot"
-	if s.data.Jobs == nil {
-		s.data.Jobs = map[string]*store.Job{}
-	}
-	if s.data.DeliveryBatches == nil {
-		s.data.DeliveryBatches = map[string]messaging.DeliveryBatch{}
-	}
-	s.data.Jobs[id] = job
-	s.data.DeliveryBatches[key] = messaging.DeliveryBatch{Fingerprint: fingerprint, IDs: []string{id}}
-	if err = s.saveLocked(); err != nil {
-		delete(s.data.Jobs, id)
-		delete(s.data.DeliveryBatches, key)
-		s.data.NextClientID = oldNext
-		if job.Media != nil {
-			_ = (store.MediaCache{Directory: filepath.Join(s.directory, "media"), Binding: r.Account}).Remove(id)
-		}
-		return bot.Delivery{}, err
-	}
-	s.signal()
-	return a.deliveryLocked(id, job), nil
-}
 func (a BotAdapter) Download(ctx context.Context, account, conversation, file string) (bot.Content, error) {
+	if err := ctx.Err(); err != nil {
+		return bot.Content{}, err
+	}
 	parts := strings.Split(file, "/")
 	if len(parts) != 2 {
 		return bot.Content{}, bot.ErrNotFound
+	}
+	if strings.HasPrefix(parts[0], "outgoing:") && parts[1] == "cache" {
+		id := strings.TrimPrefix(parts[0], "outgoing:")
+		s := a.Service
+		s.mu.RLock()
+		if !s.mediaScopeLocked() || s.data.Binding != account {
+			s.mu.RUnlock()
+			return bot.Content{}, bot.ErrScope
+		}
+		job := s.data.Jobs[id]
+		if job == nil || job.Media == nil || s.sessionID([]byte(job.Recipient)) != conversation {
+			s.mu.RUnlock()
+			return bot.Content{}, bot.ErrNotFound
+		}
+		metadata := *job.Media
+		s.mu.RUnlock()
+		content, err := (store.MediaCache{Directory: filepath.Join(s.directory, "media"), Binding: account}).Load(id)
+		if err != nil {
+			return bot.Content{}, err
+		}
+		digest := sha256.Sum256(content)
+		if int64(len(content)) != metadata.Size || hex.EncodeToString(digest[:]) != metadata.Digest {
+			return bot.Content{}, errors.New("media_integrity_failed")
+		}
+		if a.Snapshot().Account != account {
+			return bot.Content{}, bot.ErrScope
+		}
+		return bot.Content{Data: content, MIME: metadata.MIME, Name: metadata.Name}, nil
 	}
 	id, err := a.Service.Download(account, conversation, parts[0], parts[1])
 	if err != nil {

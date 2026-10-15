@@ -22,7 +22,7 @@ func main() {
 }
 func run(args []string) error {
 	command := "serve"
-	if len(args) > 0 && args[0][0] != '-' {
+	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
 		command, args = args[0], args[1:]
 	}
 	if command == "catalog" {
@@ -32,6 +32,9 @@ func run(args []string) error {
 	path := flags.String("config", "runtime.local.json", "runtime configuration file")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected positional arguments")
 	}
 	cfg, err := host.ReadConfig(*path)
 	if err != nil {

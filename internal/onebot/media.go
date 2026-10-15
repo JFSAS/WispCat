@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 func fetchMedia(ctx context.Context, source string) ([]byte, error) {
@@ -78,6 +80,8 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	stop := context.AfterFunc(s.shutdown, cancel)
+	defer stop()
 	content, err := s.Runtime.Channel.Download(ctx, q.Get("account"), q.Get("conversation"), q.Get("file"))
 	if err != nil {
 		http.Error(w, "media_unavailable", 404)
@@ -105,4 +109,16 @@ func (r *Runtime) fileReference(account, file string) (string, string, error) {
 		return "", "", errors.New("file_unavailable")
 	}
 	return conversation, source, nil
+}
+
+func validUploadName(name string) bool {
+	if name == "" || name == "." || name == ".." || len(name) > 255 || !utf8.ValidString(name) || strings.ContainsAny(name, "/\\") {
+		return false
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
+			return false
+		}
+	}
+	return true
 }

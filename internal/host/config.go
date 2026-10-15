@@ -1,6 +1,7 @@
 package host
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -46,12 +47,16 @@ func ReadConfig(path string) (Config, error) {
 	}
 	defer file.Close()
 	var c Config
-	decoder := json.NewDecoder(io.LimitReader(file, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(file, (1<<20)+1))
+	if err != nil || len(raw) > 1<<20 {
+		return c, errors.New("runtime_config_too_large")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&c) != nil || decoder.Decode(new(any)) != io.EOF {
 		return c, errors.New("invalid_runtime_config")
 	}
-	return c, c.Validate()
+	return effectiveConfig(c)
 }
 func validName(name string) bool {
 	return name != "" && len(name) <= 64 && strings.Trim(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") == ""
@@ -71,6 +76,9 @@ func token(name string) (string, error) {
 	return value, nil
 }
 func (c Config) Validate() error {
+	return c.validate(true)
+}
+func (c Config) validate(networks bool) error {
 	if c.StateDir == "" || !loopbackListen(c.Listen) || len(c.Accounts) < 1 || len(c.Accounts) > 16 {
 		return errors.New("invalid_runtime_topology")
 	}
@@ -94,6 +102,9 @@ func (c Config) Validate() error {
 		addresses[a.Listen] = true
 		if _, err := token(a.TokenEnv); err != nil {
 			return err
+		}
+		if !networks {
+			continue
 		}
 		endpoints := map[string]bool{}
 		if len(a.HTTPPost) > 16 {

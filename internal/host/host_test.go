@@ -3,8 +3,13 @@ package host
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -14,6 +19,97 @@ func testConfig(t *testing.T) Config {
 	t.Setenv("TEST_ADMIN_TOKEN", "synthetic-admin-token")
 	t.Setenv("TEST_BOT_TOKEN", "synthetic-onebot-token")
 	return Config{StateDir: t.TempDir(), Listen: "127.0.0.1:0", TokenEnv: "TEST_ADMIN_TOKEN", Accounts: []Account{{Name: "first", Instance: "instance:first", Mode: "offline", Listen: "127.0.0.1:0", TokenEnv: "TEST_BOT_TOKEN"}, {Name: "second", Instance: "instance:second", Mode: "offline", Listen: "127.0.0.1:0", TokenEnv: "TEST_BOT_TOKEN"}}}
+}
+
+func TestCloseReleasesListenerNeverRegisteredWithHTTPServer(t *testing.T) {
+	cfg := testConfig(t)
+	h, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	h.listener, h.admin, h.started = listener, &http.Server{Handler: h}, true
+	if err = h.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rebound, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatal("partial startup leaked listener", err)
+	}
+	rebound.Close()
+}
+
+func TestTimedOutCloseStillCompletesOwnershipCleanup(t *testing.T) {
+	cfg := testConfig(t)
+	h, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.wg.Add(1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	if err = h.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	if _, err = New(cfg); err == nil {
+		t.Fatal("ownership released before work stopped")
+	}
+	h.wg.Done()
+	wait, stop := context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	if err = h.Close(wait); err != nil {
+		t.Fatal(err)
+	}
+	next, err := New(cfg)
+	if err != nil {
+		t.Fatal("cleanup was abandoned after caller timeout", err)
+	}
+	_ = next.Close(context.Background())
+}
+func TestManagementConcurrencyIsBounded(t *testing.T) {
+	cfg := testConfig(t)
+	h, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err = h.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close(context.Background())
+	var work sync.WaitGroup
+	var writers []*io.PipeWriter
+	for range 16 {
+		reader, writer := io.Pipe()
+		writers = append(writers, writer)
+		q := httptest.NewRequest("POST", "http://"+h.Address()+"/accounts/first/offline", reader)
+		q.Header.Set("Authorization", "Bearer synthetic-admin-token")
+		work.Add(1)
+		go func() { defer work.Done(); h.ServeHTTP(httptest.NewRecorder(), q) }()
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(h.requests) != 16 {
+		if time.Now().After(deadline) {
+			t.Fatal("management requests did not enter")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	q := httptest.NewRequest("GET", "http://"+h.Address()+"/accounts", nil)
+	q.Header.Set("Authorization", "Bearer synthetic-admin-token")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, q)
+	for _, writer := range writers {
+		_ = writer.Close()
+	}
+	work.Wait()
+	if w.Code != 503 || h.admin.ReadTimeout == 0 {
+		t.Fatal("management admission/read timeout missing", w.Code)
+	}
 }
 func TestOfflineMultiAccountRuntimeAndStateLock(t *testing.T) {
 	cfg := testConfig(t)

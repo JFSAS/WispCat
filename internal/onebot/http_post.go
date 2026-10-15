@@ -22,7 +22,7 @@ type PostConfig struct{ Name, URL, Secret string }
 
 // RunPost reports each event independently of other consumers. A successful
 // HTTP response is a transport acknowledgement, not proof of bot processing.
-func (s *Server) RunPost(parent context.Context, cfg PostConfig) error {
+func (s *Server) RunPost(parent context.Context, cfg PostConfig) (runErr error) {
 	u, err := url.Parse(cfg.URL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || cfg.Name == "" {
 		return errors.New("invalid_http_post_configuration")
@@ -40,7 +40,7 @@ func (s *Server) RunPost(parent context.Context, cfg PostConfig) error {
 	s.wg.Add(1)
 	s.mu.Unlock()
 	defer s.wg.Done()
-	defer s.status(cfg.Name, "httpClient", "stopped", "", false)
+	defer func() { s.finish(cfg.Name, "httpClient", runErr) }()
 	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	account := ""
 	cursor := uint64(0)
