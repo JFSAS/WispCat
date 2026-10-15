@@ -1,0 +1,43 @@
+{
+  "classification": "Application-shipped PUBLIC keys only; no account credentials or private key",
+  "target_sha256": "413c124643903640946836d631fb4185133a8ffccbf2863e77b9a4b70568abd6",
+  "profile": "production",
+  "profile_id": 10013,
+  "curve_nid": 415,
+  "signing_curve_nid": 415,
+  "ecdh_public_key_hex": "042323f77d07a963a07d72d500707cdf1debc436f396a2a02e9aed80290f90ab0ef7e902bdc795f19b1398b53345f0832550a5604d4eaa0fbf33650e69457df29f",
+  "signing_public_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECRMMt0D2BqwoOLCuUAt85QmGSD7J\nXQFpeu7ahoobfuDXBrBcnyB3COPAROgNiUOGCOVxAKgr1Zx8pAqozH1FqA==\n-----END PUBLIC KEY-----\n",
+  "ecdh_point_bytes": 65,
+  "signing_pem_bytes": 178,
+  "ecdh_public_sha256": "8a885eb673acfa1b793b6cd2d0cf842bb49524ae0428fe24dfb767172b9cacfe",
+  "signing_public_sha256": "26d6644e0e0b5b5169e63955b8aa213276046761fe28564719eab71e8aa6263a",
+  "source_encoded_texts": {
+    "ecdh": "BCMj930HqWOgfXLVAHB83x3rxDbzlqKgLprtgCkPkKsO9+kCvceV8ZsTmLUzRfCDJVClYE1Oqg+/M2UOaUV98p8=",
+    "signer": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFQ1JNTXQwRDJCcXdvT0xDdVVBdDg1UW1HU0Q3SgpYUUZwZXU3YWhvb2JmdURYQnJCY255QjNDT1BBUk9nTmlVT0dDT1Z4QUtncjFaeDhwQXFvekgxRnFBPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg=="
+  },
+  "source": {
+    "table_va": "0x8488700",
+    "table_file_offset": 138970880,
+    "ecdh_initializer": "0x6c8a1cc",
+    "ecdh_key_period": 20,
+    "ecdh_key_offset": 0,
+    "ecdh_data_offset": 20,
+    "ecdh_length": 88,
+    "ecdh_formula": "((data[i]+138)&255) XOR key[i%20]",
+    "signer_initializer": "0x6c8a268",
+    "signer_key_period": 20,
+    "signer_key_offset": 109,
+    "signer_data_offset": 129,
+    "signer_length": 240,
+    "signer_formula": "data[i] XOR key[i%20]",
+    "conversion": "base64 decode via0x206a8\u21920xaaf00"
+  },
+  "validation": {
+    "base64_strict_decode": true,
+    "ecdh_on_P256_curve": true,
+    "public_point_encoding": "SEC1 uncompressed",
+    "pem_loads_as": "EC public key, secp256r1",
+    "private_material_present": false,
+    "native_or_network_execution": false
+  }
+}
