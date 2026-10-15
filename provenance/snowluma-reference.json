@@ -1,0 +1,15 @@
+{
+  "repository": "SnowLuma/SnowLuma",
+  "commit": "87527cb7641a5a42f8f0efb73cb066102e004dee",
+  "use": "Architecture reference only. No SnowLuma TypeScript implementation or supplied native binary is copied.",
+  "inspected": [
+    "packages/onebot/src/action-kit.ts",
+    "packages/onebot/src/actions/index.ts",
+    "packages/onebot/src/event-converter/index.ts",
+    "packages/onebot/src/network/network-manager.ts",
+    "packages/onebot/src/network/ws-client-adapter.ts",
+    "packages/onebot/src/network/http-post-adapter.ts",
+    "packages/core/src/bridge/manager.ts",
+    "packages/mcp/README.md"
+  ]
+}

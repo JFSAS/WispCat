@@ -3,3 +3,4 @@
 *.test
 coverage.out
 runtime.local.json
+/reports/
