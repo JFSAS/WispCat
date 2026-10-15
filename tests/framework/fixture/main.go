@@ -157,6 +157,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	defer state.Close()
 	channels := []*synthetic{}
 	servers := []*onebot.Server{}
 	for _, account := range []string{"synthetic-account-a", "synthetic-account-b"} {

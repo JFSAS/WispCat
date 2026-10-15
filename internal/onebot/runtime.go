@@ -180,11 +180,17 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		if fresh {
 			return fail(100, "fresh_member_lookup_not_supported")
 		}
-		g, ok := r.State.resolve(snap.Account, "group", group)
+		g, ok, e := r.State.resolveChecked(snap.Account, "group", group)
+		if e != nil {
+			return fail(1500, "state_unavailable")
+		}
 		if !ok {
 			return fail(100, "group_unavailable")
 		}
-		u, ok := r.State.resolve(snap.Account, "user", user)
+		u, ok, e := r.State.resolveChecked(snap.Account, "user", user)
+		if e != nil {
+			return fail(1500, "state_unavailable")
+		}
 		if !ok {
 			return fail(100, "member_unavailable")
 		}
@@ -245,7 +251,10 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		if e != nil {
 			return fail(1400, "invalid_user_id")
 		}
-		ref, ok := r.State.resolve(snap.Account, "user", id)
+		ref, ok, e := r.State.resolveChecked(snap.Account, "user", id)
+		if e != nil {
+			return fail(1500, "state_unavailable")
+		}
 		if !ok {
 			return fail(100, "user_unavailable")
 		}
@@ -260,7 +269,10 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		if e != nil {
 			return fail(1400, "invalid_message_id")
 		}
-		ref, ok := r.State.resolve(snap.Account, "message", id)
+		ref, ok, e := r.State.resolveChecked(snap.Account, "message", id)
+		if e != nil {
+			return fail(1500, "state_unavailable")
+		}
 		if !ok {
 			return fail(100, "message_unavailable")
 		}
@@ -319,6 +331,9 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		}
 		conversation, source, e := r.fileReference(snap.Account, file)
 		if e != nil {
+			if errors.Is(e, errStateUnavailable) {
+				return fail(1500, "state_unavailable")
+			}
 			return fail(100, "file_unavailable")
 		}
 		wait, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -391,7 +406,10 @@ func (r *Runtime) send(ctx context.Context, q Request, snap bot.Snapshot) Respon
 	if err != nil {
 		return fail(1400, "invalid_"+field)
 	}
-	ref, ok := r.State.resolve(snap.Account, kind, id)
+	ref, ok, err := r.State.resolveChecked(snap.Account, kind, id)
+	if err != nil {
+		return fail(1500, "state_unavailable")
+	}
 	if !ok {
 		return fail(100, "target_unavailable")
 	}
@@ -407,6 +425,9 @@ func (r *Runtime) send(ctx context.Context, q Request, snap bot.Snapshot) Respon
 	}
 	req, err := r.prepareSend(ctx, q.Params, snap, ref.Key, group)
 	if err != nil {
+		if errors.Is(err, errStateUnavailable) {
+			return fail(1500, "state_unavailable")
+		}
 		return fail(1400, err.Error())
 	}
 	d, err := r.Channel.Submit(ctx, req)
@@ -538,18 +559,27 @@ func (r *Runtime) Convert(ev bot.Event) (map[string]any, error) {
 	if snap.Account != ev.Account {
 		return nil, bot.ErrScope
 	}
-	self, err := r.State.ID(ev.Account, "user", snap.Self.ID)
+	identities := []Identity{{"user", snap.Self.ID}, {"user", ev.Sender.ID}, {"message", ev.ID}}
+	if ev.Conversation.Kind == "group" {
+		identities = append(identities, Identity{"group", ev.Conversation.ID})
+	}
+	for _, part := range ev.Message {
+		switch part.Type {
+		case "at":
+			identities = append(identities, Identity{"user", part.Data["user_id"]})
+		case "image", "file":
+			identities = append(identities, Identity{"file", ev.Conversation.ID + "\x00" + part.Data["file"]})
+		}
+	}
+	ids, err := r.State.IDBatch(ev.Account, identities)
 	if err != nil {
 		return nil, err
 	}
-	sender, err := r.State.ID(ev.Account, "user", ev.Sender.ID)
-	if err != nil {
-		return nil, err
+	lookup := map[Identity]int64{}
+	for i, identity := range identities {
+		lookup[identity] = ids[i]
 	}
-	mid, err := r.State.ID(ev.Account, "message", ev.ID)
-	if err != nil {
-		return nil, err
-	}
+	self, sender, mid := ids[0], ids[1], ids[2]
 	segments := []bot.Segment{}
 	for _, s := range ev.Message {
 		data := map[string]string{}
@@ -557,18 +587,12 @@ func (r *Runtime) Convert(ev bot.Event) (map[string]any, error) {
 			data[k] = v
 		}
 		if s.Type == "at" {
-			n, e := r.State.ID(ev.Account, "user", data["user_id"])
-			if e != nil {
-				return nil, e
-			}
+			n := lookup[Identity{"user", data["user_id"]}]
 			data = map[string]string{"qq": strconv.FormatInt(n, 10)}
 		}
 		if s.Type == "image" || s.Type == "file" {
 			source := data["file"]
-			n, e := r.State.ID(ev.Account, "file", ev.Conversation.ID+"\x00"+source)
-			if e != nil {
-				return nil, e
-			}
+			n := lookup[Identity{"file", ev.Conversation.ID + "\x00" + source}]
 			data["file"] = strconv.FormatInt(n, 10)
 			if r.MediaURL != nil {
 				data["url"] = r.MediaURL(ev.Account, ev.Conversation.ID, source)
@@ -583,10 +607,7 @@ func (r *Runtime) Convert(ev bot.Event) (map[string]any, error) {
 	}
 	v := map[string]any{"time": ev.Time, "self_id": self, "post_type": "message", "message_type": kind, "sub_type": sub, "message_id": mid, "user_id": sender, "message": segments, "raw_message": renderCQ(segments), "font": 0, "sender": map[string]any{"user_id": sender, "nickname": ev.Sender.Name, "sex": "unknown", "age": 0}, "wechat_event_id": ev.ID, "wechat_sequence": ev.Sequence}
 	if kind == "group" {
-		n, e := r.State.ID(ev.Account, "group", ev.Conversation.ID)
-		if e != nil {
-			return nil, e
-		}
+		n := lookup[Identity{"group", ev.Conversation.ID}]
 		v["group_id"] = n
 		v["anonymous"] = nil
 		v["sender"].(map[string]any)["wechat_role_known"] = false

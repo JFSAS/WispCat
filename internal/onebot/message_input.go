@@ -50,7 +50,10 @@ func (r *Runtime) prepareSend(ctx context.Context, params map[string]json.RawMes
 			if e != nil {
 				return req, errors.New("invalid_mention")
 			}
-			ref, ok := r.State.resolve(snap.Account, "user", id)
+			ref, ok, e := r.State.resolveChecked(snap.Account, "user", id)
+			if e != nil {
+				return req, errStateUnavailable
+			}
 			if !ok {
 				return req, errors.New("mention_unavailable")
 			}

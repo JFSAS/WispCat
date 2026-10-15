@@ -290,7 +290,11 @@ func (s *Server) serveConn(parent context.Context, c *websocket.Conn, role, cons
 	}
 	cursor := snap.Cursor
 	if consumer != "" && role != "API" {
-		cursor = s.Runtime.State.cursor(snap.Account, consumer, snap.Cursor)
+		cursor, err = s.Runtime.State.cursor(snap.Account, consumer, snap.Cursor)
+		if err != nil {
+			s.status(consumer, "wsClient", "degraded", "state_cursor_unavailable", false)
+			return
+		}
 		if err = s.Runtime.State.setCursor(snap.Account, consumer, cursor); err != nil {
 			return
 		}

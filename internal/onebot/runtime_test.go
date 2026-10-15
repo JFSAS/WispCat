@@ -32,6 +32,7 @@ func fixture(t *testing.T) (*Runtime, *fakeChannel) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	t.Cleanup(func() { _ = state.Close() })
 	c := &fakeChannel{snap: bot.Snapshot{Account: "account-a", Self: bot.User{ID: "owner", Name: "Bot"}, Online: true, State: "connected", Epoch: 1}, deliveries: map[string]bot.Delivery{}, keys: map[string]string{}}
 	return New(c, state), c
 }
@@ -152,17 +153,14 @@ func invoke(t *testing.T, r *Runtime, action, params string) Response {
 
 func TestStateIDsSurviveRestartAndRejectCorruption(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenState(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := openLegacyFixture(t, dir)
 	a, _ := s.ID("a", "user", "person")
 	b, _ := s.ID("a", "group", "person")
 	c, _ := s.ID("b", "user", "person")
 	if a == b || a == c || b == c {
 		t.Fatal("mapping collision")
 	}
-	if err = s.setCursor("a", "consumer", 17); err != nil {
+	if err := s.setCursor("a", "consumer", 17); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := OpenState(dir)
@@ -170,11 +168,15 @@ func TestStateIDsSurviveRestartAndRejectCorruption(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := reopened.ID("a", "user", "person")
-	if got != a || reopened.cursor("a", "consumer", 0) != 17 {
+	cursor, cursorErr := reopened.cursor("a", "consumer", 0)
+	if got != a || cursor != 17 || cursorErr != nil {
 		t.Fatal("identity or cursor changed after restart")
 	}
-	if _, ok := reopened.resolve("b", "user", a); ok {
+	if _, ok, err := reopened.resolveChecked("b", "user", a); ok || err != nil {
 		t.Fatal("cross-account reverse lookup")
+	}
+	if err = reopened.Close(); err != nil {
+		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "onebot.state"))
 	if err != nil {

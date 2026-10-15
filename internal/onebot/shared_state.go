@@ -1,6 +1,8 @@
 package onebot
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,94 +10,190 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
+	"github.com/JFSAS/wechat-runtime/internal/securedb"
 	"github.com/JFSAS/wechat-runtime/internal/store"
 )
 
-// OpenSharedState allocates public IDs once per application root. Keys remain
-// account-scoped, but two accounts cannot advertise the same OneBot self_id.
-// Compatible legacy mappings are imported without renumbering or deleting them.
+// OpenSharedState imports every legacy mapping in one index transaction, without
+// renumbering or deleting source snapshots. A conflict publishes none of the batch.
 func OpenSharedState(directory string, legacyDirectories []string) (*State, error) {
-	sharedDirectory, err := filepath.Abs(directory)
+	absolute, err := filepath.Abs(directory)
 	if err != nil {
 		return nil, err
 	}
-	s, err := OpenState(directory)
+	var sources []string
+	for _, legacy := range legacyDirectories {
+		source, e := filepath.Abs(legacy)
+		if e != nil {
+			return nil, e
+		}
+		if source != absolute {
+			sources = append(sources, source)
+		}
+	}
+	return openState(directory, sources)
+}
+
+func legacyBytes(directory string) ([]byte, string, error) {
+	raw, err := store.ReadPrivate(filepath.Join(directory, "onebot.state"), maxStateBytes)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	digest := sha256.Sum256(raw)
+	return raw, hex.EncodeToString(digest[:]), nil
+}
+
+func readLegacy(directory string) (*durableState, string, error) {
+	raw, fingerprint, err := legacyBytes(directory)
+	if err != nil || raw == nil {
+		return nil, fingerprint, err
+	}
+	data, err := decodeLegacy(directory, raw)
+	return data, fingerprint, err
+}
+
+func decodeLegacy(directory string, raw []byte) (*durableState, error) {
+	key, err := store.ReadPrivate(filepath.Join(directory, "onebot.key"), 32)
+	if err != nil || len(key) != 32 {
+		return nil, errors.New("legacy_onebot_key_invalid")
+	}
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	raw, _ := json.Marshal(s.data)
-	var candidate durableState
-	if err = json.Unmarshal(raw, &candidate); err != nil {
-		return nil, err
+	aead, err := cipher.NewGCM(block)
+	if err != nil || len(raw) < aead.NonceSize()+aead.Overhead() {
+		return nil, errors.New("legacy_onebot_state_invalid")
 	}
-	if candidate.Imports == nil {
-		candidate.Imports = map[string]string{}
+	plain, err := aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], []byte("wechat-runtime/onebot/v1"))
+	if err != nil {
+		return nil, errors.New("legacy_onebot_state_authentication_failed")
 	}
-	for _, legacyDirectory := range legacyDirectories {
-		absolute, err := filepath.Abs(legacyDirectory)
-		if err != nil {
-			return nil, err
+	var data durableState
+	if json.Unmarshal(plain, &data) != nil || data.Version != 1 || data.Next < 10000 || data.Next > 2147483647 || data.IDs == nil || data.Refs == nil || data.Cursors == nil || len(data.IDs) > 100000 || len(data.IDs) != len(data.Refs) {
+		return nil, errors.New("legacy_onebot_state_invalid")
+	}
+	for key, id := range data.IDs {
+		ref, ok := data.Refs[strconv.FormatInt(id, 10)]
+		if !ok || id <= 0 || id >= data.Next || key != identityKey(ref.Account, ref.Kind, ref.Key) {
+			return nil, errors.New("legacy_onebot_mapping_invalid")
 		}
-		if absolute == sharedDirectory {
-			continue
+	}
+	return &data, nil
+}
+
+func (s *State) importLegacy(tx *securedb.Tx, meta *indexMeta, directory string, own bool) error {
+	raw, fingerprint, err := legacyBytes(directory)
+	if err != nil || raw == nil {
+		return err
+	}
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256([]byte(absolute))
+	source := hex.EncodeToString(digest[:])
+	if own {
+		source = "root-v1-snapshot"
+	}
+	imported, err := tx.Get("imports", s.db.Key("legacy", source))
+	if err != nil {
+		return err
+	}
+	if imported != nil {
+		if string(imported) != fingerprint {
+			return errors.New("legacy_onebot_state_changed_after_migration")
 		}
-		path := filepath.Join(absolute, "onebot.state")
-		encrypted, err := store.ReadPrivate(path, maxStateBytes)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
+		return nil
+	}
+	data, err := decodeLegacy(directory, raw)
+	if err != nil {
+		return err
+	}
+	for _, id := range data.IDs {
+		ref := data.Refs[strconv.FormatInt(id, 10)]
+		old, e := s.lookup(tx, ref)
+		if e != nil {
+			return e
 		}
-		if err != nil {
-			return nil, err
-		}
-		identity := sha256.Sum256([]byte(absolute))
-		source := hex.EncodeToString(identity[:])
-		digest := sha256.Sum256(encrypted)
-		fingerprint := hex.EncodeToString(digest[:])
-		if imported, ok := candidate.Imports[source]; ok {
-			if imported != fingerprint {
-				return nil, errors.New("legacy_onebot_state_changed_after_migration")
+		if old != 0 {
+			if old != id {
+				return errors.New("legacy_onebot_id_conflict")
 			}
 			continue
 		}
-		legacy, err := OpenState(absolute)
-		if err != nil {
-			return nil, err
+		other, e := tx.Get("references", []byte(strconv.FormatInt(id, 10)))
+		if e != nil {
+			return e
 		}
-		for key, id := range legacy.data.IDs {
-			ref := legacy.data.Refs[strconv.FormatInt(id, 10)]
-			if old, exists := candidate.IDs[key]; exists {
-				if old != id {
-					return nil, errors.New("legacy_onebot_id_conflict")
-				}
+		if other != nil {
+			return errors.New("legacy_onebot_id_collision")
+		}
+		if e = s.putIdentity(tx, ref, id); e != nil {
+			return e
+		}
+		meta.IDs++
+	}
+	for key, cursor := range data.Cursors {
+		parts := strings.SplitN(key, "\x00", 3)
+		if len(parts) != 3 || parts[0] == "" || parts[1] != "cursor" || parts[2] == "" {
+			return errors.New("legacy_onebot_cursor_invalid")
+		}
+		lookup := s.db.Key("cursor", parts[0], parts[2])
+		raw, e := tx.Get("cursors", lookup)
+		if e != nil {
+			return e
+		}
+		if raw != nil {
+			var old uint64
+			if json.Unmarshal(raw, &old) != nil {
+				return errors.New("onebot_cursor_invalid")
+			}
+			if old >= cursor {
 				continue
 			}
-			if old, exists := candidate.Refs[strconv.FormatInt(id, 10)]; exists && old != ref {
-				return nil, errors.New("legacy_onebot_id_collision")
+		} else {
+			if meta.Cursors >= 1024 {
+				return errors.New("consumer_limit")
 			}
-			candidate.IDs[key] = id
-			candidate.Refs[strconv.FormatInt(id, 10)] = ref
+			meta.Cursors++
 		}
-		for key, cursor := range legacy.data.Cursors {
-			if old, exists := candidate.Cursors[key]; !exists || cursor > old {
-				candidate.Cursors[key] = cursor
-			}
+		raw, _ = json.Marshal(cursor)
+		if e = tx.Put("cursors", lookup, raw); e != nil {
+			return e
 		}
-		if legacy.data.Next > candidate.Next {
-			candidate.Next = legacy.data.Next
+	}
+	for previous, fingerprint := range data.Imports {
+		if err = s.rememberImport(tx, meta, previous, fingerprint); err != nil {
+			return err
 		}
-		candidate.Imports[source] = fingerprint
 	}
-	if len(candidate.IDs) > 100000 || len(candidate.Cursors) > 1024 {
-		return nil, errors.New("shared_onebot_state_full")
+	if data.Next > meta.Next {
+		meta.Next = data.Next
 	}
-	old := s.data
-	s.data = candidate
-	if err = s.saveLocked(); err != nil {
-		s.data = old
-		return nil, err
+	return s.rememberImport(tx, meta, source, fingerprint)
+}
+
+func (s *State) rememberImport(tx *securedb.Tx, meta *indexMeta, source, fingerprint string) error {
+	key := s.db.Key("legacy", source)
+	old, err := tx.Get("imports", key)
+	if err != nil {
+		return err
 	}
-	return s, nil
+	if old != nil {
+		if string(old) != fingerprint {
+			return errors.New("legacy_onebot_state_changed_after_migration")
+		}
+		return nil
+	}
+	if err = tx.Put("imports", key, []byte(fingerprint)); err != nil {
+		return err
+	}
+	meta.Imports++
+	return nil
 }

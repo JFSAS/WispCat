@@ -35,6 +35,7 @@ type accountRuntime struct {
 type Host struct {
 	config        Config
 	lock          *os.File
+	state         *onebot.State
 	accounts      []*accountRuntime
 	listener      net.Listener
 	admin         *http.Server
@@ -69,6 +70,9 @@ func New(c Config) (*Host, error) {
 	h := &Host{config: c, lock: lock, requests: make(chan struct{}, 16)}
 	h.token, _ = token(c.TokenEnv)
 	cleanup := func(err error) (*Host, error) {
+		if h.state != nil {
+			_ = h.state.Close()
+		}
 		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 		_ = lock.Close()
 		return nil, err
@@ -99,6 +103,7 @@ func New(c Config) (*Host, error) {
 	if e != nil {
 		return cleanup(e)
 	}
+	h.state = shared
 	for _, a := range c.Accounts {
 		p := profiles[a.Name]
 		if e = service.RecoverBotIntents(p.Directory); e != nil {
@@ -259,6 +264,11 @@ func (h *Host) shutdown() {
 	// A caller deadline does not abandon ownership cleanup or permit another
 	// process to start while old protocol work is still in flight.
 	h.wg.Wait()
+	if h.state != nil {
+		if err := h.state.Close(); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	if h.lock != nil {
 		_ = syscall.Flock(int(h.lock.Fd()), syscall.LOCK_UN)
 		_ = h.lock.Close()
@@ -306,6 +316,15 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			result = append(result, map[string]any{"name": a.config.Name, "status": a.channel.Status(), "connections": a.adapter.Statuses(), "onebot_address": a.listener.Addr().String()})
 		}
 		reply(200, result)
+		return
+	}
+	if r.URL.Path == "/storage" && r.Method == "GET" {
+		stats, err := h.state.Stats()
+		if err != nil {
+			reply(503, map[string]string{"error": "state_storage_unavailable"})
+			return
+		}
+		reply(200, stats)
 		return
 	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")

@@ -16,6 +16,7 @@ go version
 pkg-config --modversion openssl sqlite3
 mkdir -p .bin
 go test -race -count=1 -json ./... > .bin/linux-go-test.jsonl
+python3 tools/report-go-tests.py .bin/linux-go-test.jsonl --report .bin/linux-test-summary.json
 go vet ./...
 mkdir -p .bin
 go build -trimpath -o .bin/wechat-runtime ./cmd/wechat-runtime

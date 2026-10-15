@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/JFSAS/wechat-runtime/internal/instances"
-	"github.com/JFSAS/wechat-runtime/internal/onebot"
 )
 
 func testConfig(t *testing.T) Config {
@@ -23,6 +22,48 @@ func testConfig(t *testing.T) Config {
 	t.Setenv("TEST_ADMIN_TOKEN", "synthetic-admin-token")
 	t.Setenv("TEST_BOT_TOKEN", "synthetic-onebot-token")
 	return Config{StateDir: t.TempDir(), Listen: "127.0.0.1:0", TokenEnv: "TEST_ADMIN_TOKEN", Accounts: []Account{{Name: "first", Instance: "instance:first", Mode: "offline", Listen: "127.0.0.1:0", TokenEnv: "TEST_BOT_TOKEN"}, {Name: "second", Instance: "instance:second", Mode: "offline", Listen: "127.0.0.1:0", TokenEnv: "TEST_BOT_TOKEN"}}}
+}
+
+func TestStorageDiagnosticsAndIndexOwnershipCleanup(t *testing.T) {
+	cfg := testConfig(t)
+	h, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close(context.Background())
+	if err = h.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	id, err := h.state.ID("synthetic-account", "user", "private-person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest("GET", "http://"+h.Address()+"/storage", nil)
+	request.Header.Set("Authorization", "Bearer synthetic-admin-token")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, request)
+	var stats map[string]any
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &stats) != nil || stats["identities"] != float64(1) || stats["file_bytes"].(float64) <= 0 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "private-person") || strings.Contains(response.Body.String(), "synthetic-account") {
+		t.Fatal("storage diagnostics exposed private identities")
+	}
+	if err = h.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = h.state.ID("synthetic-account", "user", "private-person"); err == nil {
+		t.Fatal("host shutdown left index open")
+	}
+	next, err := New(cfg)
+	if err != nil {
+		t.Fatal("closed host retained index ownership", err)
+	}
+	defer next.Close(context.Background())
+	restored, err := next.state.ID("synthetic-account", "user", "private-person")
+	if err != nil || restored != id {
+		t.Fatal(restored, id, err)
+	}
 }
 
 func TestSharedPublicIDsReserveDisabledLegacyInstances(t *testing.T) {
@@ -36,14 +77,7 @@ func TestSharedPublicIDsReserveDisabledLegacyInstances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := onebot.OpenState(filepath.Join(disabled.Directory, "onebot"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldID, err := legacy.ID("account-disabled", "user", "owner")
-	if err != nil {
-		t.Fatal(err)
-	}
+	oldID := writeLegacyPublicID(t, filepath.Join(disabled.Directory, "onebot"), "account-disabled")
 	h, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)

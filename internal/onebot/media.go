@@ -100,7 +100,10 @@ func (r *Runtime) fileReference(account, file string) (string, string, error) {
 	if err != nil {
 		return "", "", errors.New("file_unavailable")
 	}
-	ref, ok := r.State.resolve(account, "file", id)
+	ref, ok, err := r.State.resolveChecked(account, "file", id)
+	if err != nil {
+		return "", "", errStateUnavailable
+	}
 	if !ok {
 		return "", "", errors.New("file_unavailable")
 	}

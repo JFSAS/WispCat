@@ -65,7 +65,10 @@ func (s *Server) RunPost(parent context.Context, cfg PostConfig) (runErr error) 
 			if err != nil {
 				return err
 			}
-			cursor = s.Runtime.State.cursor(account, cfg.Name, snap.Cursor)
+			cursor, err = s.Runtime.State.cursor(account, cfg.Name, snap.Cursor)
+			if err != nil {
+				return err
+			}
 			if err = s.Runtime.State.setCursor(account, cfg.Name, cursor); err != nil {
 				return err
 			}
