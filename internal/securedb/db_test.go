@@ -199,3 +199,38 @@ func TestEncryptedIndexRejectsSymlinkAndBroadPermissions(t *testing.T) {
 		t.Fatal("index accepted broad file permissions")
 	}
 }
+
+func TestEncryptedPrefixScanBoundariesAndLimit(t *testing.T) {
+	db, err := Open(t.TempDir(), "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = db.Update(func(tx *Tx) error {
+		for _, key := range []string{"prefix-0", "prefix-1", "prefix-2", "unrelated"} {
+			if e := tx.Put("range", []byte(key), []byte("value-"+key)); e != nil {
+				return e
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	if err = db.View(func(tx *Tx) error {
+		return tx.Scan("range", []byte("prefix-"), []byte("prefix-1"), 2, func(key, value []byte) (bool, error) {
+			if string(value) != "value-"+string(key) {
+				t.Fatal("range value lost authentication/context")
+			}
+			keys = append(keys, string(key))
+			return true, nil
+		})
+	}); err != nil || len(keys) != 2 || keys[0] != "prefix-1" || keys[1] != "prefix-2" {
+		t.Fatal("scan crossed a prefix or lower boundary", keys, err)
+	}
+	if err = db.View(func(tx *Tx) error {
+		return tx.Scan("range", []byte("prefix-"), []byte("prefix-"), 1, func([]byte, []byte) (bool, error) { return true, nil })
+	}); err == nil {
+		t.Fatal("scan limit did not bound traversal")
+	}
+}

@@ -21,8 +21,10 @@ import (
 // BotAdapter adds normalized identities without changing the imported wire
 // implementation. A group sender and a direct contact share sessionID(username).
 type BotAdapter struct {
-	Service *Service
-	persist func() error
+	Service      *Service
+	Archive      *DeliveryArchive
+	persist      func() error
+	archiveWrite func([]archivedBatch) error
 }
 
 func channelError(err error) error {
@@ -175,7 +177,15 @@ func (a BotAdapter) Events(account string, after uint64, limit int) ([]bot.Event
 			if !ok {
 				return nil, bot.ErrNotFound
 			}
-			result = append(result, a.eventLocked(m, e.Sequence))
+			value := a.eventLocked(m, e.Sequence)
+			if !value.LocalEcho && a.Archive != nil {
+				echo, err := a.Archive.localEcho(account, m, s.data.Session.Bootstrap.Username)
+				if err != nil {
+					return nil, err
+				}
+				value.LocalEcho = echo
+			}
+			result = append(result, value)
 			if len(result) == limit {
 				break
 			}
@@ -202,6 +212,22 @@ func (a BotAdapter) Message(account, id string) (bot.Event, error) {
 		delivery := a.deliveryLocked(deliveryID, job)
 		if delivery.MessageID == id {
 			return bot.Event{ID: id, Account: account, Conversation: bot.Conversation{ID: delivery.Conversation, Kind: conversationKind([]byte(job.Recipient)), Name: s.labelLocked([]byte(job.Recipient))}, Sender: bot.User{ID: s.sessionID(s.data.Session.Bootstrap.Username), Name: "WeChat"}, Time: delivery.Time, Message: delivery.Message, Own: true, LocalEcho: true}, nil
+		}
+	}
+	if a.Archive != nil {
+		row, err := a.Archive.indexed(account, "messages", id)
+		if err != nil {
+			return bot.Event{}, err
+		}
+		if row != nil {
+			for i, job := range row.Jobs {
+				if job.ServerID == 0 || a.receiptMessageID(&job) != id {
+					continue
+				}
+				delivery := a.deliveryLocked(row.IDs[i], &job)
+				return bot.Event{ID: id, Account: account, Conversation: bot.Conversation{ID: delivery.Conversation, Kind: conversationKind([]byte(job.Recipient)), Name: s.labelLocked([]byte(job.Recipient))}, Sender: bot.User{ID: s.sessionID(s.data.Session.Bootstrap.Username), Name: "WeChat"}, Time: delivery.Time, Message: delivery.Message, Own: true, LocalEcho: true}, nil
+			}
+			return bot.Event{}, ErrDeliveryArchive
 		}
 	}
 	return bot.Event{}, bot.ErrNotFound
@@ -252,6 +278,13 @@ func (a BotAdapter) Delivery(account, id string) (bot.Delivery, error) {
 	}
 	j := s.data.Jobs[id]
 	if j == nil {
+		if a.Archive != nil {
+			row, err := a.Archive.indexed(account, "jobs", id)
+			if err != nil {
+				return bot.Delivery{}, err
+			}
+			return a.archivedDeliveryLocked(row, id)
+		}
 		return bot.Delivery{}, bot.ErrNotFound
 	}
 	for _, batch := range s.data.DeliveryBatches {
@@ -279,6 +312,21 @@ func (a BotAdapter) Download(ctx context.Context, account, conversation, file st
 			return bot.Content{}, bot.ErrScope
 		}
 		job := s.data.Jobs[id]
+		if job == nil && a.Archive != nil {
+			row, err := a.Archive.indexed(account, "jobs", id)
+			if err != nil {
+				s.mu.RUnlock()
+				return bot.Content{}, err
+			}
+			if row != nil {
+				for i, archivedID := range row.IDs {
+					if archivedID == id {
+						job = &row.Jobs[i]
+						break
+					}
+				}
+			}
+		}
 		if job == nil || job.Media == nil || s.sessionID([]byte(job.Recipient)) != conversation {
 			s.mu.RUnlock()
 			return bot.Content{}, bot.ErrNotFound

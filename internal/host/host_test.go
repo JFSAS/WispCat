@@ -24,6 +24,76 @@ func testConfig(t *testing.T) Config {
 	return Config{StateDir: t.TempDir(), Listen: "127.0.0.1:0", TokenEnv: "TEST_ADMIN_TOKEN", Accounts: []Account{{Name: "first", Instance: "instance:first", Mode: "offline", Listen: "127.0.0.1:0", TokenEnv: "TEST_BOT_TOKEN"}, {Name: "second", Instance: "instance:second", Mode: "offline", Listen: "127.0.0.1:0", TokenEnv: "TEST_BOT_TOKEN"}}}
 }
 
+func TestArchiveManagementAuthenticationAndOwnership(t *testing.T) {
+	cfg := testConfig(t)
+	h, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close(context.Background())
+	if err = h.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		method, path, body, token string
+		code                      int
+	}{
+		{"GET", "/accounts/first/archive", "", "", 401},
+		{"POST", "/accounts/first/archive/compact", "{}", "", 401},
+		{"GET", "/accounts/first/archive", "", "synthetic-admin-token", 200},
+		{"GET", "/accounts/second/archive", "", "synthetic-admin-token", 200},
+		{"POST", "/accounts/first/archive/compact", `{"unexpected":true}`, "synthetic-admin-token", 400},
+		// No account has logged in. Compaction must report unavailable and must
+		// not attempt to acquire a session or start protocol work.
+		{"POST", "/accounts/first/archive/compact", "{}", "synthetic-admin-token", 409},
+	} {
+		request := httptest.NewRequest(tc.method, "http://"+h.Address()+tc.path, strings.NewReader(tc.body))
+		if tc.token != "" {
+			request.Header.Set("Authorization", "Bearer "+tc.token)
+		}
+		response := httptest.NewRecorder()
+		h.ServeHTTP(response, request)
+		if response.Code != tc.code {
+			t.Fatal(tc.method, tc.path, response.Code, response.Body.String())
+		}
+		if tc.code == 200 {
+			var stats struct {
+				Archive struct {
+					Batches uint64 `json:"archived_batches"`
+					Jobs    uint64 `json:"archived_jobs"`
+				} `json:"archive"`
+			}
+			if json.Unmarshal(response.Body.Bytes(), &stats) != nil || stats.Archive.Batches != 0 || stats.Archive.Jobs != 0 {
+				t.Fatal(response.Body.String())
+			}
+		}
+	}
+	for _, account := range h.accounts {
+		status := account.channel.Status()
+		raw, _ := json.Marshal(status)
+		var values map[string]any
+		_ = json.Unmarshal(raw, &values)
+		for _, name := range []string{"auth_calls", "sync_calls", "send_calls"} {
+			if values[name] != float64(0) {
+				t.Fatal("archive management triggered protocol work", name, values)
+			}
+		}
+	}
+	if err = h.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range h.accounts {
+		if _, err := account.bot.ArchiveStatus(); err == nil {
+			t.Fatal("host shutdown left delivery archive open")
+		}
+	}
+	next, err := New(cfg)
+	if err != nil {
+		t.Fatal("archive ownership survived host shutdown", err)
+	}
+	_ = next.Close(context.Background())
+}
+
 func TestStorageDiagnosticsAndIndexOwnershipCleanup(t *testing.T) {
 	cfg := testConfig(t)
 	h, err := New(cfg)

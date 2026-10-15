@@ -28,6 +28,7 @@ type accountRuntime struct {
 	config      Account
 	connections *connectionSettings
 	channel     *service.Service
+	bot         service.BotAdapter
 	adapter     *onebot.Server
 	listener    net.Listener
 	http        *http.Server
@@ -70,6 +71,11 @@ func New(c Config) (*Host, error) {
 	h := &Host{config: c, lock: lock, requests: make(chan struct{}, 16)}
 	h.token, _ = token(c.TokenEnv)
 	cleanup := func(err error) (*Host, error) {
+		for _, a := range h.accounts {
+			if a.bot.Archive != nil {
+				_ = a.bot.Archive.Close()
+			}
+		}
 		if h.state != nil {
 			_ = h.state.Close()
 		}
@@ -106,18 +112,29 @@ func New(c Config) (*Host, error) {
 	h.state = shared
 	for _, a := range c.Accounts {
 		p := profiles[a.Name]
-		if e = service.RecoverBotIntents(p.Directory); e != nil {
-			return cleanup(e)
-		}
-		channel := service.New(p.Directory, time.Second, p.App)
-		state := shared
-		secret, _ := token(a.TokenEnv)
-		adapter := onebot.NewServer(onebot.New(service.BotAdapter{Service: channel}, state), secret, "")
-		settings, e := openConnectionSettings(p.Directory, c, a)
+		archive, e := service.OpenDeliveryArchive(p.Directory)
 		if e != nil {
 			return cleanup(e)
 		}
-		h.accounts = append(h.accounts, &accountRuntime{config: a, channel: channel, adapter: adapter, connections: settings})
+		if e = archive.Recover(p.Directory); e != nil {
+			_ = archive.Close()
+			return cleanup(e)
+		}
+		if e = service.RecoverBotIntents(p.Directory, archive); e != nil {
+			_ = archive.Close()
+			return cleanup(e)
+		}
+		channel := service.New(p.Directory, time.Second, p.App)
+		bot := service.BotAdapter{Service: channel, Archive: archive}
+		state := shared
+		secret, _ := token(a.TokenEnv)
+		adapter := onebot.NewServer(onebot.New(bot, state), secret, "")
+		settings, e := openConnectionSettings(p.Directory, c, a)
+		if e != nil {
+			_ = archive.Close()
+			return cleanup(e)
+		}
+		h.accounts = append(h.accounts, &accountRuntime{config: a, channel: channel, bot: bot, adapter: adapter, connections: settings})
 	}
 	return h, nil
 }
@@ -168,8 +185,10 @@ func (h *Host) Start(parent context.Context) error {
 	h.started = true
 	h.admin = &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 16384}
 	for _, a := range h.accounts {
-		a.channel.EnableNativeMedia()
+		a.bot.EnableNativeMedia()
 		a.channel.Start(ctx, a.config.Mode)
+		h.wg.Add(1)
+		go func(a *accountRuntime) { defer h.wg.Done(); a.bot.RunArchive(ctx) }(a)
 		h.wg.Add(1)
 		go func(a *accountRuntime) { defer h.wg.Done(); a.channel.Wait() }(a)
 		a.http = &http.Server{Handler: a.adapter, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 16384}
@@ -264,6 +283,13 @@ func (h *Host) shutdown() {
 	// A caller deadline does not abandon ownership cleanup or permit another
 	// process to start while old protocol work is still in flight.
 	h.wg.Wait()
+	for _, a := range h.accounts {
+		if a.bot.Archive != nil {
+			if err := a.bot.Archive.Close(); err != nil {
+				failures = append(failures, err)
+			}
+		}
+	}
 	if h.state != nil {
 		if err := h.state.Close(); err != nil {
 			failures = append(failures, err)
@@ -364,6 +390,13 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			reply(200, a.adapter.Runtime.Actions())
 		case "deliveries":
 			reply(200, a.channel.Deliveries())
+		case "archive":
+			status, err := a.bot.ArchiveStatus()
+			if err != nil {
+				reply(503, map[string]string{"error": "delivery_archive_unavailable"})
+				return
+			}
+			reply(200, status)
 		default:
 			reply(404, map[string]string{"error": "not_found"})
 		}
@@ -410,6 +443,16 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	switch action {
+	case "archive/compact":
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		report, e := a.bot.ArchiveCompleted(ctx)
+		if e != nil {
+			reply(409, map[string]string{"error": "delivery_archive_pending"})
+			return
+		}
+		reply(200, report)
+		return
 	case "connections/apply":
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
@@ -438,6 +481,6 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 const managementPage = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>WeChat Runtime</title><style>body{max-width:960px;margin:40px auto;font:16px system-ui;background:#f6f7f9;color:#17212c}input,button{padding:10px;margin:5px}pre{background:white;padding:20px;white-space:pre-wrap}article{background:white;padding:20px;margin:15px 0;border-radius:8px}</style><h1>WeChat Runtime</h1><p>独立微信通道 · OneBot v11。Bot 和模型在外部进程运行。</p><input id="token" type="password" placeholder="管理令牌" autocomplete="off"><button id="refresh">刷新账号</button><main id="accounts"></main><script>
 const token=document.querySelector('#token'),out=document.querySelector('#accounts');
 async function call(path,method='GET'){const r=await fetch(path,{method,headers:{Authorization:'Bearer '+token.value,...(method==='POST'?{'Content-Type':'application/json'}:{})},...(method==='POST'?{body:'{}'}:{})});if(!r.ok)throw Error('HTTP '+r.status);return r.json()}
-async function refresh(){try{const rows=await call('/accounts');out.replaceChildren();for(const a of rows){const card=document.createElement('article'),title=document.createElement('h2'),pre=document.createElement('pre');title.textContent=a.name;pre.textContent=JSON.stringify(a,null,2);card.append(title,pre);for(const [name,action] of [['恢复缓存连接','online'],['离线','offline'],['申请二维码','login/start'],['取消扫码','login/cancel']]){const b=document.createElement('button');b.textContent=name;b.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/'+action,'POST');await refresh()}catch(e){alert(e.message)}};card.append(b)}const b=document.createElement('button');b.textContent='显示二维码';b.onclick=async()=>{try{const st=await call('/accounts/'+encodeURIComponent(a.name)+'/login');if(!st.image_ready)throw Error('二维码尚未就绪，请稍后刷新');const r=await fetch('/accounts/'+encodeURIComponent(a.name)+'/login/image?id='+encodeURIComponent(st.id),{headers:{Authorization:'Bearer '+token.value}});if(!r.ok)throw Error('二维码读取失败');const img=document.createElement('img'),url=URL.createObjectURL(await r.blob());img.width=240;img.onload=()=>URL.revokeObjectURL(url);img.src=url;card.append(img)}catch(e){alert(e.message)}};card.append(b);const editor=document.createElement('textarea');editor.rows=12;editor.style.width='95%';const info=document.createElement('p');let revision='';async function loadConnections(){const state=await call('/accounts/'+encodeURIComponent(a.name)+'/connections');revision=state.revision;editor.value=JSON.stringify(state.saved,null,2);info.textContent=state.applied?'连接配置已应用':'已保存连接配置尚未应用'}const save=document.createElement('button');save.textContent='保存连接配置';save.onclick=async()=>{try{const plan=JSON.parse(editor.value);const response=await fetch('/accounts/'+encodeURIComponent(a.name)+'/connections',{method:'POST',headers:{Authorization:'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({revision,plan})});if(!response.ok)throw Error('保存失败：HTTP '+response.status);await loadConnections()}catch(e){alert(e.message)}};const apply=document.createElement('button');apply.textContent='应用已保存连接';apply.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/connections/apply','POST');await loadConnections()}catch(e){alert(e.message)}};card.append(info,editor,save,apply);out.append(card);await loadConnections()}}catch(e){out.textContent=e.message}}
+async function refresh(){try{const rows=await call('/accounts');out.replaceChildren();for(const a of rows){const card=document.createElement('article'),title=document.createElement('h2'),pre=document.createElement('pre');title.textContent=a.name;pre.textContent=JSON.stringify(a,null,2);card.append(title,pre);for(const [name,action] of [['恢复缓存连接','online'],['离线','offline'],['申请二维码','login/start'],['取消扫码','login/cancel']]){const b=document.createElement('button');b.textContent=name;b.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/'+action,'POST');await refresh()}catch(e){alert(e.message)}};card.append(b)}const b=document.createElement('button');b.textContent='显示二维码';b.onclick=async()=>{try{const st=await call('/accounts/'+encodeURIComponent(a.name)+'/login');if(!st.image_ready)throw Error('二维码尚未就绪，请稍后刷新');const r=await fetch('/accounts/'+encodeURIComponent(a.name)+'/login/image?id='+encodeURIComponent(st.id),{headers:{Authorization:'Bearer '+token.value}});if(!r.ok)throw Error('二维码读取失败');const img=document.createElement('img'),url=URL.createObjectURL(await r.blob());img.width=240;img.onload=()=>URL.revokeObjectURL(url);img.src=url;card.append(img)}catch(e){alert(e.message)}};card.append(b);const archive=document.createElement('pre');archive.hidden=true;for(const [label,path,method] of [['投递归档状态','archive','GET'],['归档已完成投递','archive/compact','POST']]){const button=document.createElement('button');button.textContent=label;button.onclick=async()=>{try{const result=await call('/accounts/'+encodeURIComponent(a.name)+'/'+path,method);archive.textContent=JSON.stringify(result,null,2);archive.hidden=false}catch(e){alert(e.message)}};card.append(button)}card.append(archive);const editor=document.createElement('textarea');editor.rows=12;editor.style.width='95%';const info=document.createElement('p');let revision='';async function loadConnections(){const state=await call('/accounts/'+encodeURIComponent(a.name)+'/connections');revision=state.revision;editor.value=JSON.stringify(state.saved,null,2);info.textContent=state.applied?'连接配置已应用':'已保存连接配置尚未应用'}const save=document.createElement('button');save.textContent='保存连接配置';save.onclick=async()=>{try{const plan=JSON.parse(editor.value);const response=await fetch('/accounts/'+encodeURIComponent(a.name)+'/connections',{method:'POST',headers:{Authorization:'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({revision,plan})});if(!response.ok)throw Error('保存失败：HTTP '+response.status);await loadConnections()}catch(e){alert(e.message)}};const apply=document.createElement('button');apply.textContent='应用已保存连接';apply.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/connections/apply','POST');await loadConnections()}catch(e){alert(e.message)}};card.append(info,editor,save,apply);out.append(card);await loadConnections()}}catch(e){out.textContent=e.message}}
 document.querySelector('#refresh').onclick=refresh;
 </script></html>`

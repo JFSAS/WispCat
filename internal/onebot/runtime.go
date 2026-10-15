@@ -45,6 +45,12 @@ func good(data any) Response { return Response{Status: "ok", Data: data} }
 func fail(code int, category string) Response {
 	return Response{Status: "failed", Retcode: code, Message: category, Wording: category}
 }
+func channelFailure(err error, code int, category string) Response {
+	if errors.Is(err, bot.ErrStorage) {
+		return fail(1500, "runtime_storage_unavailable")
+	}
+	return fail(code, category)
+}
 func (r *Runtime) Actions() []Action {
 	items := []Action{}
 	for _, v := range []struct {
@@ -279,7 +285,7 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		if strings.HasPrefix(ref.Key, "delivery/") {
 			d, e := r.Channel.Delivery(snap.Account, strings.TrimPrefix(ref.Key, "delivery/"))
 			if e != nil {
-				return fail(100, "message_unavailable")
+				return channelFailure(e, 100, "message_unavailable")
 			}
 			conversation := bot.Conversation{ID: d.Conversation, Kind: "private"}
 			for _, c := range r.Channel.Conversations() {
@@ -304,7 +310,7 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		}
 		ev, e := r.Channel.Message(snap.Account, ref.Key)
 		if e != nil {
-			return fail(100, "message_unavailable")
+			return channelFailure(e, 100, "message_unavailable")
 		}
 		v, e := r.Convert(ev)
 		if e != nil {
@@ -321,7 +327,7 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		}
 		d, e := r.Channel.Delivery(snap.Account, id)
 		if e != nil {
-			return fail(100, "delivery_unavailable")
+			return channelFailure(e, 100, "delivery_unavailable")
 		}
 		return good(d)
 	case "get_image":
@@ -340,7 +346,7 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		defer cancel()
 		content, e := r.Channel.Download(wait, snap.Account, conversation, source)
 		if e != nil {
-			return fail(100, "media_unavailable")
+			return channelFailure(e, 100, "media_unavailable")
 		}
 		link := ""
 		if r.MediaURL != nil {
@@ -432,6 +438,9 @@ func (r *Runtime) send(ctx context.Context, q Request, snap bot.Snapshot) Respon
 	}
 	d, err := r.Channel.Submit(ctx, req)
 	if err != nil {
+		if errors.Is(err, bot.ErrStorage) {
+			return channelFailure(err, 100, "send_unavailable")
+		}
 		if errors.Is(err, bot.ErrConflict) {
 			return fail(100, "idempotency_conflict")
 		}
@@ -484,7 +493,7 @@ func (r *Runtime) send(ctx context.Context, q Request, snap bot.Snapshot) Respon
 		}
 		d, err = r.Channel.Delivery(snap.Account, d.ID)
 		if err != nil {
-			return fail(100, "delivery_unavailable")
+			return channelFailure(err, 100, "delivery_unavailable")
 		}
 	}
 }

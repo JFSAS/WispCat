@@ -20,11 +20,15 @@ packages = sorted({event['Package'] for event in events if event['Action'] == 'p
 assert passed and packages, 'No completed test packages were recorded'
 loads = [json.loads(event['Output'].split('STATE_INDEX_LOAD_REPORT=', 1)[1])
          for event in events if 'STATE_INDEX_LOAD_REPORT=' in event.get('Output', '')]
+archives = [json.loads(event['Output'].split('DELIVERY_ARCHIVE_LOAD_REPORT=', 1)[1])
+            for event in events if 'DELIVERY_ARCHIVE_LOAD_REPORT=' in event.get('Output', '')]
 result = {'result': 'pass', 'top_level_passed': len(passed), 'top_level_skipped': len(skipped),
-          'skipped': skipped, 'passed_packages': packages, 'index_load': loads,
+          'skipped': skipped, 'passed_packages': packages, 'index_load': loads, 'archive_load': archives,
           'test_json_sha256': hashlib.sha256(raw).hexdigest()}
 if args.report:
     args.report.write_text(json.dumps(result, indent=2) + '\n')
 print(f'Passed: {len(passed)} top-level tests; skipped: {len(skipped)}; packages: {len(packages)}')
 for load in loads:
+    print(json.dumps(load))
+for load in archives:
     print(json.dumps(load))

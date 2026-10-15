@@ -3,6 +3,7 @@
 package securedb
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -224,6 +225,36 @@ func (tx *Tx) HasRecords(bucket string) bool {
 	}
 	key, _ := b.Cursor().First()
 	return key != nil
+}
+
+// Scan visits a bounded ordered prefix range inside the current transaction.
+// Keys and decrypted values belong to the caller, not to the database mmap.
+// Returning false stops the scan; exhausting limit before stopping is an error.
+func (tx *Tx) Scan(bucket string, prefix, start []byte, limit int, visit func([]byte, []byte) (bool, error)) error {
+	if len(prefix) == 0 || len(start) < len(prefix) || !bytes.HasPrefix(start, prefix) || limit < 1 || limit > 10000 {
+		return errors.New("index_scan_invalid")
+	}
+	b := tx.tx.Bucket([]byte(bucket))
+	if b == nil {
+		return nil
+	}
+	cursor := b.Cursor()
+	count := 0
+	for key, _ := cursor.Seek(start); key != nil && bytes.HasPrefix(key, prefix); key, _ = cursor.Next() {
+		if count == limit {
+			return errors.New("index_scan_limit")
+		}
+		count++
+		value, err := tx.Get(bucket, key)
+		if err != nil {
+			return err
+		}
+		more, err := visit(bytes.Clone(key), value)
+		if err != nil || !more {
+			return err
+		}
+	}
+	return nil
 }
 func (tx *Tx) Put(bucket string, key, value []byte) error {
 	if bucket == "" || len(bucket) > 64 || len(key) == 0 || len(key) > 128 || len(value) > maxRecordBytes {

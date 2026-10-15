@@ -14,6 +14,7 @@ var (
 	ErrUnsupported = errors.New("unsupported_operation")
 	ErrConflict    = errors.New("idempotency_conflict")
 	ErrNotFound    = errors.New("not_found")
+	ErrStorage     = errors.New("runtime_storage_unavailable")
 )
 
 type User struct {

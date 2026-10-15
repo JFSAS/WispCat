@@ -26,15 +26,17 @@ type preparedOutput struct {
 }
 
 func (a BotAdapter) batchLocked(ids []string) (bot.Delivery, error) {
+	return a.batchFromJobsLocked(ids, a.Service.data.Jobs)
+}
+func (a BotAdapter) batchFromJobsLocked(ids []string, jobs map[string]*store.Job) (bot.Delivery, error) {
 	if len(ids) == 0 {
 		return bot.Delivery{}, bot.ErrNotFound
 	}
-	s := a.Service
 	parts := make([]bot.Delivery, 0, len(ids))
 	state := "accepted"
 	priority := map[string]int{"accepted": 0, "echo_observed": 0, "queued": 1, "sending": 1, "uploading": 1, "submitting": 1, "cancelled": 2, "failed": 3, "unknown": 4}
 	for _, id := range ids {
-		job := s.data.Jobs[id]
+		job := jobs[id]
 		if job == nil {
 			return bot.Delivery{}, bot.ErrNotFound
 		}
@@ -128,14 +130,20 @@ func (a BotAdapter) Submit(ctx context.Context, r bot.Send) (bot.Delivery, error
 		}
 		return a.batchLocked(batch.IDs)
 	}
+	if a.Archive != nil {
+		row, err := a.Archive.batch(r.Account, key)
+		if err != nil {
+			return bot.Delivery{}, err
+		}
+		if row != nil {
+			if row.Fingerprint != fingerprint {
+				return bot.Delivery{}, bot.ErrConflict
+			}
+			return a.archivedDeliveryLocked(row, row.IDs[0])
+		}
+	}
 	if s.state != "connected" || s.mode != "online" || s.modeEpoch != r.Epoch || s.data.SessionInvalid {
 		return bot.Delivery{}, bot.ErrUnavailable
-	}
-	if len(s.data.Jobs)+len(outputs) > 10000 || len(s.data.DeliveryBatches) >= 10000 {
-		return bot.Delivery{}, errors.New("send_journal_full")
-	}
-	if mediaCachedBytes(s.data)+total > MaxMediaCacheBytes {
-		return bot.Delivery{}, ErrMediaQueueFull
 	}
 	peer, ok := s.peersLocked()[r.Conversation]
 	if !ok {
@@ -177,7 +185,42 @@ func (a BotAdapter) Submit(ctx context.Context, r bot.Send) (bot.Delivery, error
 		}
 		prepared = append(prepared, part)
 	}
+	if a.Archive != nil && (len(s.data.Jobs) >= archiveHighWater || len(s.data.DeliveryBatches) >= archiveHighWater) {
+		if _, err := a.compactLocked(ctx, archiveKeepActive); err != nil {
+			return bot.Delivery{}, err
+		}
+	}
+	if len(s.data.Jobs)+len(outputs) > 10000 || len(s.data.DeliveryBatches) >= 10000 {
+		return bot.Delivery{}, errors.New("send_journal_full")
+	}
+	if total > 0 {
+		cached, err := a.accountedMediaLocked()
+		if err != nil {
+			return bot.Delivery{}, err
+		}
+		if cached+total > MaxMediaCacheBytes && a.Archive != nil {
+			// Finish any already-committed pruning before conservatively charging
+			// the same retained media in both the active checkpoint and archive.
+			if _, err = a.compactLocked(ctx, archiveKeepActive); err != nil {
+				return bot.Delivery{}, err
+			}
+			cached, err = a.accountedMediaLocked()
+			if err != nil {
+				return bot.Delivery{}, err
+			}
+		}
+		if cached+total > MaxMediaCacheBytes {
+			return bot.Delivery{}, ErrMediaQueueFull
+		}
+	}
 	oldNext := s.data.NextClientID
+	if a.Archive != nil {
+		reserved, err := a.Archive.reserveNative(r.Account, s.data.NextClientID, len(prepared))
+		if err != nil {
+			return bot.Delivery{}, err
+		}
+		s.data.NextClientID = reserved
+	}
 	if s.data.NextClientID == 0 {
 		s.data.NextClientID = 1
 	}

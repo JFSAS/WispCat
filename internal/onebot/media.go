@@ -14,6 +14,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/JFSAS/wechat-runtime/pkg/bot"
 )
 
 func fetchMedia(ctx context.Context, source string) ([]byte, error) {
@@ -84,6 +86,10 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request) {
 	defer stop()
 	content, err := s.Runtime.Channel.Download(ctx, q.Get("account"), q.Get("conversation"), q.Get("file"))
 	if err != nil {
+		if errors.Is(err, bot.ErrStorage) {
+			http.Error(w, "runtime_storage_unavailable", 503)
+			return
+		}
 		http.Error(w, "media_unavailable", 404)
 		return
 	}

@@ -60,7 +60,7 @@ func checkpointDefinitelyExcludes(cp store.Checkpoint, key, fingerprint string) 
 // RecoverBotIntents runs before a channel worker starts. An intent survives
 // only an uncertain queue commit/cleanup; queued parts cannot be replayed until
 // the checkpoint has been reconciled and durably saved in a conservative state.
-func RecoverBotIntents(directory string) error {
+func RecoverBotIntents(directory string, archives ...*DeliveryArchive) error {
 	root := filepath.Join(directory, "bot-intents")
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -130,13 +130,28 @@ func RecoverBotIntents(directory string) error {
 			break
 		}
 		if !found {
+			archived := false
+			if len(archives) > 0 && archives[0] != nil {
+				row, e := archives[0].indexed(intent.Account, "batch-hashes", intent.BatchHash)
+				if e != nil {
+					return e
+				}
+				if row != nil {
+					if row.Fingerprint != intent.Fingerprint || !reflect.DeepEqual(row.IDs, intent.IDs) {
+						return errors.New("delivery_intent_archive_conflict")
+					}
+					archived = true
+				}
+			}
 			cache := store.MediaCache{Directory: filepath.Join(directory, "media"), Binding: intent.Account}
 			for _, id := range intent.IDs {
 				if data.Jobs[id] != nil {
 					return errors.New("delivery_intent_orphan_conflict")
 				}
-				if err = cache.Remove(id); err != nil && !errors.Is(err, os.ErrNotExist) {
-					return errors.New("delivery_intent_cleanup_failed")
+				if !archived {
+					if err = cache.Remove(id); err != nil && !errors.Is(err, os.ErrNotExist) {
+						return errors.New("delivery_intent_cleanup_failed")
+					}
 				}
 			}
 		}
