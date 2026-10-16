@@ -13,10 +13,7 @@ case "$(uname -s)" in
     ;;
   Linux)
     platform=linux
-    if [ -n "$(ip -o address show scope global)$(ip route show)$(ip -6 route show default)" ]; then
-      echo 'Archive checks require a loopback-only Linux network namespace.' >&2
-      exit 1
-    fi
+    sh tools/require-loopback-network.sh
     sh tools/go.sh test -race -count=1 -timeout 30m -json -tags storagefixtures ./internal/service -run '^TestArchiveCumulativeCapacity$' > ".bin/$platform-archive-load.jsonl"
     ;;
   *) echo 'No enforced offline network sandbox for this OS.' >&2; exit 1 ;;

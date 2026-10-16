@@ -5,12 +5,10 @@ set -eu
 cd "$(dirname "$0")/.."
 export GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local GOENV=off CGO_ENABLED=1
 test "$(uname -s)" = Linux
-if [ -n "$(ip -o address show scope global)$(ip route show)$(ip -6 route show default)" ]; then
-  echo 'Checks require a loopback-only Linux network namespace.' >&2
-  exit 1
-fi
+sh tools/require-loopback-network.sh
 python3 tools/check_baseline.py
 python3 tools/test-baseline-checker.py
+python3 tools/test-offline-evidence.py
 ip -brief address
 ip route show
 go version

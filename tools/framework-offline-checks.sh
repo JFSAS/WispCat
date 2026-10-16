@@ -19,10 +19,7 @@ for framework do
       ;;
     Linux)
       # A namespace with only loopback must be established by the caller.
-      if [ -n "$(ip -o address show scope global)$(ip route show)$(ip -6 route show default)" ]; then
-        echo 'Framework checks require a loopback-only Linux network namespace.' >&2
-        exit 1
-      fi
+      sh tools/require-loopback-network.sh
       "$python" tests/framework/run.py "$framework"
       ;;
     *) echo 'No enforced offline network sandbox for this OS.' >&2; exit 1 ;;
