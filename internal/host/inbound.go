@@ -24,12 +24,15 @@ type inboundConnKey struct{}
 // A binding owns one socket; epochs replace its authentication without changing
 // an ephemeral port. Admission and request registration share the same lock.
 type inboundBinding struct {
-	mu       sync.Mutex
-	listener net.Listener
-	http     *http.Server
-	epoch    *inboundEpoch
-	closed   bool
-	done     chan struct{}
+	mu          sync.Mutex
+	listener    net.Listener
+	http        *http.Server
+	epoch       *inboundEpoch
+	target      listenerTarget
+	paused      bool
+	connections map[*inboundConnection]struct{}
+	closed      bool
+	done        chan struct{}
 }
 
 func newInboundEpoch(parent context.Context, secret string) *inboundEpoch {
@@ -38,7 +41,7 @@ func newInboundEpoch(parent context.Context, secret string) *inboundEpoch {
 }
 
 func newInboundBinding(target listenerTarget, listener net.Listener, epoch *inboundEpoch) *inboundBinding {
-	b := &inboundBinding{listener: listener, epoch: epoch, done: make(chan struct{})}
+	b := &inboundBinding{listener: listener, epoch: epoch, target: target, connections: map[*inboundConnection]struct{}{}, done: make(chan struct{})}
 	b.http = &http.Server{ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		IdleTimeout: 90 * time.Second, MaxHeaderBytes: 16384,
 		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
@@ -47,7 +50,10 @@ func newInboundBinding(target listenerTarget, listener net.Listener, epoch *inbo
 	b.http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b.mu.Lock()
 		epoch := b.epoch
-		if b.closed || epoch.ctx.Err() != nil {
+		target := b.target
+		conn, owned := r.Context().Value(inboundConnKey{}).(*inboundConnection)
+		_, tracked := b.connections[conn]
+		if b.closed || b.paused || epoch.ctx.Err() != nil || !owned || !tracked || conn.closed.Load() || conn.epoch != epoch {
 			b.mu.Unlock()
 			http.Error(w, "listener_stopping", 503)
 			return
@@ -71,7 +77,9 @@ func newInboundBinding(target listenerTarget, listener net.Listener, epoch *inbo
 	return b
 }
 
-func (b *inboundBinding) start() { go func() { defer close(b.done); _ = b.http.Serve(b.listener) }() }
+func (b *inboundBinding) start() {
+	go func() { defer close(b.done); _ = b.http.Serve(inboundListener{Listener: b.listener, binding: b}) }()
+}
 func (b *inboundBinding) stop() {
 	b.mu.Lock()
 	b.closed = true
@@ -251,9 +259,13 @@ func (s *inboundServer) commit(ctx context.Context, change *listenerChange) erro
 	epoch := newInboundEpoch(s.parent, change.secret)
 	previous := old.epoch
 	if change.reuse {
+		// Retire idle connections too. A parsed request may enter the handler
+		// after cancellation; its immutable connection epoch must stay old.
+		old.pause()
 		old.mu.Lock()
 		s.target.publish(old.listener.Addr().String(), change.secret)
 		old.epoch = epoch
+		old.paused = false
 		old.mu.Unlock()
 	} else {
 		s.active = newInboundBinding(s.target, change.listener, epoch)

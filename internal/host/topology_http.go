@@ -60,7 +60,9 @@ func topologyErrorCategory(err error) string {
 		return "operation_cancelled"
 	}
 	switch err.Error() {
-	case "topology_revision_conflict", "topology_config_invalid", "active_account_bootstrap_immutable",
+	case "listener_batch_revision_conflict", "listener_batch_unavailable", "invalid_listener_batch",
+		"invalid_listener_configuration", "listener_bind_failed", "listener_not_listening",
+		"topology_revision_conflict", "topology_config_invalid", "active_account_bootstrap_immutable",
 		"stop_instance_before_rename", "runtime_stopping", "runtime_not_running", "topology_config_too_large",
 		"invalid_runtime_topology", "invalid_account_configuration", "duplicate_listener",
 		"token_env_unavailable_or_invalid", "token_env_required", "connection_limit",

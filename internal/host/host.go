@@ -37,27 +37,29 @@ type accountRuntime struct {
 	listener    net.Listener
 }
 type Host struct {
-	config        Config
-	lock          *os.File
-	state         *onebot.State
-	accounts      []*accountRuntime
-	retiring      []*accountRuntime
-	topology      *topologySettings
-	management    *managementSettings
-	parent        context.Context
-	listener      net.Listener
-	admin         *http.Server
-	token         string
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	mu            sync.Mutex
-	started       bool
-	closed        bool
-	requests      chan struct{}
-	requestWork   sync.WaitGroup
-	shutdownDone  chan struct{}
-	shutdownError error
-	workerFactory *accountWorkerFactory
+	config             Config
+	lock               *os.File
+	state              *onebot.State
+	accounts           []*accountRuntime
+	retiring           []*accountRuntime
+	topology           *topologySettings
+	management         *managementSettings
+	parent             context.Context
+	listener           net.Listener
+	admin              *http.Server
+	token              string
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
+	mu                 sync.Mutex
+	started            bool
+	closed             bool
+	requests           chan struct{}
+	requestWork        sync.WaitGroup
+	shutdownDone       chan struct{}
+	shutdownError      error
+	workerFactory      *accountWorkerFactory
+	listenerChanges    sync.Mutex
+	listenerBatchError string
 }
 
 func New(c Config) (*Host, error) {
@@ -157,6 +159,7 @@ func newHost(c Config, factory *accountWorkerFactory) (*Host, error) {
 		}
 		owner.connections.configSource = h.currentConfig
 		owner.inbound.configSource = h.currentConfig
+		owner.inbound.changes = &h.listenerChanges
 		for _, original := range h.topology.saved.Accounts {
 			if original.Name == config.Name {
 				owner.bootstrap = original
@@ -401,10 +404,16 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}()
 		result := []any{}
 		for _, a := range owners {
-			address := a.listener.Addr().String()
+			address := ""
 			if a.inbound.manager != nil {
 				state, _ := a.inbound.manager.snapshot("", "")
 				address = state.Address
+			} else {
+				h.mu.Lock()
+				if a.listener != nil {
+					address = a.listener.Addr().String()
+				}
+				h.mu.Unlock()
 			}
 			result = append(result, map[string]any{"name": a.config.Name, "status": a.channel.Status(), "connections": a.adapter.Statuses(), "onebot_address": address})
 		}
@@ -418,6 +427,10 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		reply(200, stats)
+		return
+	}
+	if r.URL.Path == "/listeners" || r.URL.Path == "/listeners/apply" {
+		h.serveListeners(w, r, reply)
 		return
 	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -636,7 +649,7 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reply(202, map[string]string{"status": "queued"})
 }
 
-const managementPage = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>WeChat Runtime</title><style>body{max-width:960px;margin:40px auto;font:16px system-ui;background:#f6f7f9;color:#17212c}input,button{padding:10px;margin:5px}pre{background:white;padding:20px;white-space:pre-wrap}article{background:white;padding:20px;margin:15px 0;border-radius:8px}</style><h1>WeChat Runtime</h1><p>独立微信通道 · OneBot v11。Bot 和模型在外部进程运行。</p><input id="token" type="password" placeholder="管理令牌" autocomplete="off"><button id="refresh">刷新账号</button><section id="management-panel" hidden><h2>管理接口配置</h2><p>保存后单独应用。切换会结束旧管理连接；账号和 OneBot 连接继续运行。应用后在新地址输入目标管理令牌。</p><textarea id="management-editor" aria-label="管理接口配置" rows="5" style="width:95%"></textarea><br><button id="save-management">保存管理配置</button><button id="apply-management">应用管理配置</button><p id="management-handover"></p><a id="management-link" hidden rel="noopener">打开新的管理地址</a><pre id="management-state"></pre></section><section id="topology-panel" hidden><h2>账号列表</h2><p>编辑成员列表以加入或停用账号。停用会保留历史和编号；现有账号的网络与在线状态使用各自控件。保存后单独应用。</p><textarea id="topology-editor" aria-label="账号成员配置" rows="12" style="width:95%"></textarea><br><button id="save-topology">保存账号列表</button><button id="apply-topology">应用账号列表</button><pre id="topology-state"></pre></section><main id="accounts"></main><script>
+const managementPage = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>WeChat Runtime</title><style>body{max-width:960px;margin:40px auto;font:16px system-ui;background:#f6f7f9;color:#17212c}input,button{padding:10px;margin:5px}pre{background:white;padding:20px;white-space:pre-wrap}article{background:white;padding:20px;margin:15px 0;border-radius:8px}</style><h1>WeChat Runtime</h1><p>独立微信通道 · OneBot v11。Bot 和模型在外部进程运行。</p><input id="token" type="password" placeholder="管理令牌" autocomplete="off"><button id="refresh">刷新账号</button><section id="management-panel" hidden><h2>管理接口配置</h2><p>保存后单独应用。切换会结束旧管理连接；账号和 OneBot 连接继续运行。应用后在新地址输入目标管理令牌。</p><textarea id="management-editor" aria-label="管理接口配置" rows="5" style="width:95%"></textarea><br><button id="save-management">保存管理配置</button><button id="apply-management">应用管理配置</button><p id="management-handover"></p><a id="management-link" hidden rel="noopener">打开新的管理地址</a><pre id="management-state"></pre></section><section id="topology-panel" hidden><h2>账号列表</h2><p>编辑成员列表以加入或停用账号。停用会保留历史和编号；现有账号的网络与在线状态使用各自控件。保存后单独应用。</p><textarea id="topology-editor" aria-label="账号成员配置" rows="12" style="width:95%"></textarea><br><button id="save-topology">保存账号列表</button><button id="apply-topology">应用账号列表</button><pre id="topology-state"></pre></section><section id="listeners-panel" hidden><h2>协调应用入站监听</h2><p>先保存各账号的入站监听，再一起应用；可直接交换两个账号的端口。变更会结束相关的旧入站连接，微信会话继续运行。</p><button id="apply-listeners">应用全部已保存监听</button><pre id="listeners-state"></pre></section><main id="accounts"></main><script>
 const token=document.querySelector('#token'),out=document.querySelector('#accounts');
 async function call(path,method='GET'){const r=await fetch(path,{method,headers:{Authorization:'Bearer '+token.value,...(method==='POST'?{'Content-Type':'application/json'}:{})},...(method==='POST'?{body:'{}'}:{})});if(!r.ok)throw Error('HTTP '+r.status);return r.json()}
 const managementPanel=document.querySelector('#management-panel'),managementEditor=document.querySelector('#management-editor'),managementState=document.querySelector('#management-state'),managementHandover=document.querySelector('#management-handover'),managementLink=document.querySelector('#management-link');let managementRevision='';
@@ -647,6 +660,9 @@ const topologyPanel=document.querySelector('#topology-panel'),topologyEditor=doc
 async function loadTopology(){const state=await call('/topology');topologyRevision=state.revision;topologyEditor.value=JSON.stringify(state.saved,null,2);topologyState.textContent=JSON.stringify({applied:state.applied,active:state.active,retiring:state.retiring,error:state.error},null,2);topologyPanel.hidden=false}
 document.querySelector('#save-topology').onclick=async()=>{try{const plan=JSON.parse(topologyEditor.value);const response=await fetch('/topology',{method:'POST',headers:{Authorization:'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({revision:topologyRevision,plan})});if(!response.ok){const failure=await response.json();throw Error(failure.category||'保存失败')}await loadTopology()}catch(e){alert(e.message)}};
 document.querySelector('#apply-topology').onclick=async()=>{try{await call('/topology/apply','POST');await refresh()}catch(e){alert(e.message);await loadTopology()}};
+const listenersPanel=document.querySelector('#listeners-panel'),listenersState=document.querySelector('#listeners-state');let listenersRevision='';
+async function loadListeners(){const state=await call('/listeners');listenersRevision=state.revision;listenersState.textContent=JSON.stringify({applied:state.applied,accounts:state.accounts,error:state.error},null,2);listenersPanel.hidden=false}
+document.querySelector('#apply-listeners').onclick=async()=>{try{const response=await fetch('/listeners/apply',{method:'POST',headers:{Authorization:'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({revision:listenersRevision})});const result=await response.json();if(!response.ok)throw Error(result.category||'应用失败');await refresh()}catch(e){alert(e.message);await loadListeners()}};
 async function loadListener(card,name){
  const title=document.createElement('h3');title.textContent='OneBot 入站监听';
  const hint=document.createElement('p');hint.textContent='保存后单独应用。换端口或令牌会断开旧入站请求和 WebSocket，微信会话继续运行。';
@@ -655,10 +671,10 @@ async function loadListener(card,name){
  const path='/accounts/'+encodeURIComponent(name)+'/listener';
  async function load(){const state=await call(path);revision=state.revision;editor.value=JSON.stringify(state.saved,null,2);info.textContent=JSON.stringify({applied:state.applied,active_revision:state.active_revision,listener:state.listener,error:state.error},null,2)}
  const save=document.createElement('button');save.textContent='保存入站监听';
- save.onclick=async()=>{try{const plan=JSON.parse(editor.value);const response=await fetch(path,{method:'POST',headers:{Authorization:'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({revision,plan})});if(!response.ok)throw Error('保存失败：HTTP '+response.status);await load()}catch(e){alert(e.message)}};
+ save.onclick=async()=>{try{const plan=JSON.parse(editor.value);const response=await fetch(path,{method:'POST',headers:{Authorization:'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({revision,plan})});if(!response.ok)throw Error('保存失败：HTTP '+response.status);await load();await loadListeners()}catch(e){alert(e.message)}};
  const apply=document.createElement('button');apply.textContent='应用入站监听';apply.onclick=async()=>{try{await call(path+'/apply','POST');await load();await refresh()}catch(e){alert(e.message);await load()}};
  card.append(title,hint,editor,save,apply,info);await load()
 }
-async function refresh(){try{await loadManagement();await loadTopology();const rows=await call('/accounts');out.replaceChildren();for(const a of rows){const card=document.createElement('article'),title=document.createElement('h2'),pre=document.createElement('pre');title.textContent=a.name;pre.textContent=JSON.stringify(a,null,2);card.append(title,pre);for(const [name,action] of [['恢复缓存连接','online'],['离线','offline'],['申请二维码','login/start'],['取消扫码','login/cancel']]){const b=document.createElement('button');b.textContent=name;b.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/'+action,'POST');await refresh()}catch(e){alert(e.message)}};card.append(b)}const b=document.createElement('button');b.textContent='显示二维码';b.onclick=async()=>{try{const st=await call('/accounts/'+encodeURIComponent(a.name)+'/login');if(!st.image_ready)throw Error('二维码尚未就绪，请稍后刷新');const r=await fetch('/accounts/'+encodeURIComponent(a.name)+'/login/image?id='+encodeURIComponent(st.id),{headers:{Authorization:'Bearer '+token.value}});if(!r.ok)throw Error('二维码读取失败');const img=document.createElement('img'),url=URL.createObjectURL(await r.blob());img.width=240;img.onload=()=>URL.revokeObjectURL(url);img.src=url;card.append(img)}catch(e){alert(e.message)}};card.append(b);const archive=document.createElement('pre');archive.hidden=true;for(const [label,path,method] of [['投递归档状态','archive','GET'],['归档已完成投递','archive/compact','POST'],['临时传输状态','streams','GET'],['清理传输临时文件','streams/clean','POST'],['入站媒体缓存','media-cache','GET'],['回收入站缓存','media-cache/compact','POST'],['发送媒体状态','outgoing-media','GET'],['回收已确认发送副本','outgoing-media/compact','POST']]){const button=document.createElement('button');button.textContent=label;button.onclick=async()=>{try{const result=await call('/accounts/'+encodeURIComponent(a.name)+'/'+path,method);archive.textContent=JSON.stringify(result,null,2);archive.hidden=false}catch(e){alert(e.message)}};card.append(button)}card.append(archive);const editor=document.createElement('textarea');editor.rows=12;editor.style.width='95%';const info=document.createElement('p');let revision='';async function loadConnections(){const state=await call('/accounts/'+encodeURIComponent(a.name)+'/connections');revision=state.revision;editor.value=JSON.stringify(state.saved,null,2);info.textContent=state.applied?'连接配置已应用':'已保存连接配置尚未应用'}const save=document.createElement('button');save.textContent='保存连接配置';save.onclick=async()=>{try{const plan=JSON.parse(editor.value);const response=await fetch('/accounts/'+encodeURIComponent(a.name)+'/connections',{method:'POST',headers:{Authorization:'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({revision,plan})});if(!response.ok)throw Error('保存失败：HTTP '+response.status);await loadConnections()}catch(e){alert(e.message)}};const apply=document.createElement('button');apply.textContent='应用已保存连接';apply.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/connections/apply','POST');await loadConnections()}catch(e){alert(e.message)}};card.append(info,editor,save,apply);out.append(card);await loadConnections();await loadListener(card,a.name)}}catch(e){out.textContent=e.message}}
+async function refresh(){try{await loadManagement();await loadTopology();await loadListeners();const rows=await call('/accounts');out.replaceChildren();for(const a of rows){const card=document.createElement('article'),title=document.createElement('h2'),pre=document.createElement('pre');title.textContent=a.name;pre.textContent=JSON.stringify(a,null,2);card.append(title,pre);for(const [name,action] of [['恢复缓存连接','online'],['离线','offline'],['申请二维码','login/start'],['取消扫码','login/cancel']]){const b=document.createElement('button');b.textContent=name;b.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/'+action,'POST');await refresh()}catch(e){alert(e.message)}};card.append(b)}const b=document.createElement('button');b.textContent='显示二维码';b.onclick=async()=>{try{const st=await call('/accounts/'+encodeURIComponent(a.name)+'/login');if(!st.image_ready)throw Error('二维码尚未就绪，请稍后刷新');const r=await fetch('/accounts/'+encodeURIComponent(a.name)+'/login/image?id='+encodeURIComponent(st.id),{headers:{Authorization:'Bearer '+token.value}});if(!r.ok)throw Error('二维码读取失败');const img=document.createElement('img'),url=URL.createObjectURL(await r.blob());img.width=240;img.onload=()=>URL.revokeObjectURL(url);img.src=url;card.append(img)}catch(e){alert(e.message)}};card.append(b);const archive=document.createElement('pre');archive.hidden=true;for(const [label,path,method] of [['投递归档状态','archive','GET'],['归档已完成投递','archive/compact','POST'],['临时传输状态','streams','GET'],['清理传输临时文件','streams/clean','POST'],['入站媒体缓存','media-cache','GET'],['回收入站缓存','media-cache/compact','POST'],['发送媒体状态','outgoing-media','GET'],['回收已确认发送副本','outgoing-media/compact','POST']]){const button=document.createElement('button');button.textContent=label;button.onclick=async()=>{try{const result=await call('/accounts/'+encodeURIComponent(a.name)+'/'+path,method);archive.textContent=JSON.stringify(result,null,2);archive.hidden=false}catch(e){alert(e.message)}};card.append(button)}card.append(archive);const editor=document.createElement('textarea');editor.rows=12;editor.style.width='95%';const info=document.createElement('p');let revision='';async function loadConnections(){const state=await call('/accounts/'+encodeURIComponent(a.name)+'/connections');revision=state.revision;editor.value=JSON.stringify(state.saved,null,2);info.textContent=state.applied?'连接配置已应用':'已保存连接配置尚未应用'}const save=document.createElement('button');save.textContent='保存连接配置';save.onclick=async()=>{try{const plan=JSON.parse(editor.value);const response=await fetch('/accounts/'+encodeURIComponent(a.name)+'/connections',{method:'POST',headers:{Authorization:'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({revision,plan})});if(!response.ok)throw Error('保存失败：HTTP '+response.status);await loadConnections()}catch(e){alert(e.message)}};const apply=document.createElement('button');apply.textContent='应用已保存连接';apply.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/connections/apply','POST');await loadConnections()}catch(e){alert(e.message)}};card.append(info,editor,save,apply);out.append(card);await loadConnections();await loadListener(card,a.name)}}catch(e){out.textContent=e.message}}
 document.querySelector('#refresh').onclick=refresh;
 </script></html>`

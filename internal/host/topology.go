@@ -250,6 +250,16 @@ func (s *topologySettings) apply(ctx context.Context) (err error) {
 	if err = s.joinRetiring(ctx); err != nil {
 		return err
 	}
+	// A retiring account may still own an admitted management request that
+	// needs this gate. Join previous retirements before acquiring it, and
+	// release it after publication before joining newly removed accounts.
+	h.listenerChanges.Lock()
+	gateHeld := true
+	defer func() {
+		if gateHeld {
+			h.listenerChanges.Unlock()
+		}
+	}()
 	top.Accounts = cloneTopology(s.saved).Accounts
 	top, err = effectiveAccounts(top)
 	if err != nil {
@@ -330,6 +340,7 @@ func (s *topologySettings) apply(ctx context.Context) (err error) {
 		candidates = append(candidates, owner)
 		owner.connections.configSource = h.currentConfig
 		owner.inbound.configSource = h.currentConfig
+		owner.inbound.changes = &h.listenerChanges
 		initial[owner], err = owner.connections.specs(owner.connections.saved)
 		if err != nil {
 			s.lastError = "topology_preflight_failed"
@@ -376,6 +387,8 @@ func (s *topologySettings) apply(ctx context.Context) (err error) {
 	for _, a := range removed {
 		a.retire()
 	}
+	h.listenerChanges.Unlock()
+	gateHeld = false
 	if err = s.joinRetiring(ctx); err != nil {
 		return err
 	}

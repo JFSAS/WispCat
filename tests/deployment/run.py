@@ -48,8 +48,9 @@ def wait_for(callback, processes, timeout=30):
 
 
 def run(framework,scenario='text'):
-    assert framework in ('nonebot', 'astrbot','astrbot-application') and scenario in ('text','media','large-media','crash-media','receipt-loss','runtime-crash')
+    assert framework in ('nonebot', 'astrbot','astrbot-application') and scenario in ('text','media','large-media','crash-media','receipt-loss','runtime-crash','listener-swap')
     application=framework=='astrbot-application'
+    listener_swap=scenario=='listener-swap'
     crash=scenario=='crash-media'
     runtime_crash=scenario=='runtime-crash'
     loss=scenario in ('receipt-loss','runtime-crash')
@@ -61,7 +62,7 @@ def run(framework,scenario='text'):
     per_account=len(cases)
     per_round=per_account*len(ACCOUNTS)
     source, source_sha = load_checked()
-    output = ROOT/('.bin/deployment-runtime-crash-results' if runtime_crash else '.bin/deployment-receipt-results' if loss else '.bin/deployment-crash-results' if crash else '.bin/deployment-large-results' if large else '.bin/deployment-application-results' if application else '.bin/deployment-media-results' if scenario=='media' else '.bin/deployment-results')/(framework+'.json')
+    output = ROOT/('.bin/deployment-listener-swap-results' if listener_swap else '.bin/deployment-runtime-crash-results' if runtime_crash else '.bin/deployment-receipt-results' if loss else '.bin/deployment-crash-results' if crash else '.bin/deployment-large-results' if large else '.bin/deployment-application-results' if application else '.bin/deployment-media-results' if scenario=='media' else '.bin/deployment-results')/(framework+'.json')
     output.parent.mkdir(exist_ok=True)
     output.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix='wechat-deployment-') as directory:
@@ -296,7 +297,36 @@ def run(framework,scenario='text'):
             host_reopen_downloads={name:inspect(name)['synthetic_downloads'] for name in ACCOUNTS}
             assert host_reopen_downloads==dict.fromkeys(ACCOUNTS,0),host_reopen_downloads
             media_references_still_readable(old_media,host_reopen_downloads)
-            after_host = exercise('host_reopen', per_round)
+            listener_swap_evidence = None
+            if listener_swap:
+                before_swap = {row['name']: row for row in accounts()}
+                drivers_before_swap = {name: inspect(name) for name in ACCOUNTS}
+                login_before_swap = {name: request_json('http://'+row['onebot_address']+'/get_login_info',BOT)['data'] for name,row in before_swap.items()}
+                kept_peer_pid = peer.pid
+                for index,name in enumerate(ACCOUNTS):
+                    path = '/accounts/'+name+'/listener'
+                    saved = admin(path)
+                    plan = dict(saved['saved'],listen=before_swap[ACCOUNTS[1-index]]['onebot_address'])
+                    admin(path,'POST',{'revision':saved['revision'],'plan':plan})
+                preview = admin('/listeners')
+                assert preview['applied'] is False
+                applied = admin('/listeners/apply','POST',{'revision':preview['revision']})
+                assert applied['applied'] and applied['revision']==preview['revision'],applied
+                after_swap = {row['name']: row for row in accounts()}
+                for index,name in enumerate(ACCOUNTS):
+                    before,after = before_swap[name],after_swap[name]
+                    assert after['onebot_address']==before_swap[ACCOUNTS[1-index]]['onebot_address']
+                    assert after['connections']==before['connections'],'reverse connection was restarted by inbound handoff'
+                    assert inspect(name)==drivers_before_swap[name],'listener handoff changed native driver work or generation'
+                    login = request_json('http://'+after['onebot_address']+'/get_login_info',BOT)
+                    assert login['retcode']==0 and login['data']==login_before_swap[name]
+                media_references_still_readable(old_media,host_reopen_downloads)
+                assert peer.pid==kept_peer_pid and peer.poll() is None
+                listener_swap_evidence = {'before':before_swap,'after':after_swap,'revision':preview['revision'],
+                    'same_framework_process':True,'reverse_connections_unchanged':True,'native_driver_facts_unchanged':True,
+                    'account_ids_preserved':True,'old_media_ids_and_bytes_preserved':True,'extra_native_downloads':0}
+                restarted_accounts = accounts()
+            after_host = exercise('host_reopen_and_listener_swap' if listener_swap else 'host_reopen', per_round)
             for first, after in zip(initial, after_host):
                 assert (first['self_id'], first['user_id']) == (after['self_id'], after['user_id'])
             for old in old_messages:
@@ -534,7 +564,7 @@ def run(framework,scenario='text'):
             result = {'result': 'pass', 'framework': framework, 'framework_versions': json.loads(peer_report.read_text())['versions'],
                 'scope': 'Separate actual Host/Service/OneBot/storage/management process and actual framework process; synthetic native ingestion and terminal receipts; no native protocol session loop',
                 'framework_application_lifecycle': framework == 'nonebot' or application, 'astrbot_full_application_started': application,
-                'observations': observations, 'old_messages_stable_after_host_reopen': True, 'interrupted_http_reads':interrupted_http_reads, 'final_incoming_cache':final_incoming_cache,
+                'observations': observations, 'listener_swap':listener_swap_evidence, 'old_messages_stable_after_host_reopen': True, 'interrupted_http_reads':interrupted_http_reads, 'final_incoming_cache':final_incoming_cache,
                 'old_media_references_cached_after_host_and_account_reopen':bool(old_media),
                 'downloads_before_new_injection_after_host_reopen':host_reopen_downloads,
                 'downloads_before_account_stop':{'synthetic-b':sibling_downloads},
