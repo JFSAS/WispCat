@@ -1,6 +1,6 @@
 {
   "internal/service/service.go": {
-    "reason": "Attach optional runtime history ownership and commit durable facts before advancing the inherited checkpoint. Wire/session/client logic is unchanged.",
+    "reason": "Attach runtime history, stage contacts/raw messages before eviction, restore persisted availability for queued work, and commit history plus directory before checkpoint compaction. Wire/session/client code remains intact.",
     "insertions": [
       {
         "before_line": 58,
@@ -9,6 +9,18 @@
       {
         "before_line": 166,
         "text": "\t}\n\tif s.history != nil {\n\t\tif err := s.history.persistLocked(s); err != nil {\n\t\t\treturn err\n\t\t}\n"
+      },
+      {
+        "before_line": 289,
+        "text": "\tif s.history != nil && data != nil {\n\t\tif err := s.history.restoreRuntimeLocked(s); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n"
+      },
+      {
+        "before_line": 548,
+        "text": "\tif s.history != nil {\n\t\ts.history.stageContactsLocked(s, changes)\n\t}\n"
+      },
+      {
+        "before_line": 606,
+        "text": "\t\tif s.history != nil {\n\t\t\ts.history.stageRawLocked(s, m, !seen[key])\n\t\t}\n"
       }
     ]
   },

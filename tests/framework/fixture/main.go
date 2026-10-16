@@ -41,8 +41,8 @@ func (c *synthetic) Snapshot() bot.Snapshot {
 	defer c.mu.Unlock()
 	return bot.Snapshot{Account: c.account, Self: bot.User{ID: "owner", Name: "Synthetic Bot"}, Online: true, State: "connected", Epoch: 1, Cursor: c.cursor}
 }
-func (c *synthetic) Users() []bot.User {
-	return []bot.User{{ID: "owner", Name: "Synthetic Bot"}, {ID: "friend", Name: "Synthetic Friend"}}
+func (c *synthetic) Users() ([]bot.User, error) {
+	return []bot.User{{ID: "owner", Name: "Synthetic Bot"}, {ID: "friend", Name: "Synthetic Friend"}}, nil
 }
 func (c *synthetic) Members(account, conversation string) (bot.Roster, error) {
 	if account != c.Snapshot().Account {
@@ -51,10 +51,11 @@ func (c *synthetic) Members(account, conversation string) (bot.Roster, error) {
 	if conversation != "room" {
 		return bot.Roster{}, bot.ErrNotFound
 	}
-	return bot.Roster{Users: c.Users(), Source: "synthetic_observed", Complete: false}, nil
+	users, _ := c.Users()
+	return bot.Roster{Users: users, Source: "synthetic_observed", Complete: false}, nil
 }
-func (c *synthetic) Conversations() []bot.Conversation {
-	return []bot.Conversation{{ID: "friend", Kind: "private", Name: "Synthetic Friend"}, {ID: "room", Kind: "group", Name: "Synthetic Room"}}
+func (c *synthetic) Conversations() ([]bot.Conversation, error) {
+	return []bot.Conversation{{ID: "friend", Kind: "private", Name: "Synthetic Friend"}, {ID: "room", Kind: "group", Name: "Synthetic Room"}}, nil
 }
 func (c *synthetic) Events(account string, after uint64, limit int) ([]bot.Event, error) {
 	c.mu.Lock()
@@ -253,3 +254,47 @@ func run() error {
 }
 
 var _ bot.Channel = (*synthetic)(nil)
+
+func (c *synthetic) User(account, id string) (bot.User, error) {
+	if account != c.Snapshot().Account {
+		return bot.User{}, bot.ErrScope
+	}
+	rows, err := c.Users()
+	if err != nil {
+		return bot.User{}, err
+	}
+	for _, row := range rows {
+		if row.ID == id {
+			return row, nil
+		}
+	}
+	return bot.User{}, bot.ErrNotFound
+}
+func (c *synthetic) Conversation(account, id string) (bot.Conversation, error) {
+	if account != c.Snapshot().Account {
+		return bot.Conversation{}, bot.ErrScope
+	}
+	rows, err := c.Conversations()
+	if err != nil {
+		return bot.Conversation{}, err
+	}
+	for _, row := range rows {
+		if row.ID == id {
+			return row, nil
+		}
+	}
+	return bot.Conversation{}, bot.ErrNotFound
+}
+
+func (c *synthetic) Member(account, conversation, user string) (bot.Membership, error) {
+	roster, err := c.Members(account, conversation)
+	if err != nil {
+		return bot.Membership{}, err
+	}
+	for _, member := range roster.Users {
+		if member.ID == user {
+			return bot.Membership{User: member, Complete: roster.Complete, Source: roster.Source}, nil
+		}
+	}
+	return bot.Membership{}, bot.ErrNotFound
+}

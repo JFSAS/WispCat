@@ -46,6 +46,9 @@ func fail(code int, category string) Response {
 	return Response{Status: "failed", Retcode: code, Message: category, Wording: category}
 }
 func channelFailure(err error, code int, category string) Response {
+	if errors.Is(err, bot.ErrLimit) {
+		return fail(100, "result_size_limit")
+	}
 	if errors.Is(err, bot.ErrStorage) {
 		return fail(1500, "runtime_storage_unavailable")
 	}
@@ -203,21 +206,27 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		if !ok {
 			return fail(100, "member_unavailable")
 		}
-		roster, e := r.Channel.Members(snap.Account, g.Key)
+		room, e := r.Channel.Conversation(snap.Account, g.Key)
 		if e != nil {
+			return channelFailure(e, 100, "group_unavailable")
+		}
+		if room.Kind != "group" || room.Unavailable {
 			return fail(100, "group_unavailable")
 		}
-		for _, member := range roster.Users {
-			if member.ID == u.Key {
-				return good(map[string]any{"group_id": group, "user_id": user, "nickname": member.Name, "card": "", "wechat_role_known": false, "wechat_roster_complete": roster.Complete, "wechat_source": roster.Source})
-			}
+		membership, e := r.Channel.Member(snap.Account, g.Key, u.Key)
+		if e != nil {
+			return channelFailure(e, 100, "member_unavailable")
 		}
-		return fail(100, "member_unavailable")
+		return good(map[string]any{"group_id": group, "user_id": user, "nickname": membership.User.Name, "card": "", "wechat_role_known": false, "wechat_roster_complete": membership.Complete, "wechat_source": membership.Source})
 	case "get_login_info":
 		return good(map[string]any{"user_id": self, "nickname": snap.Self.Name})
 	case "get_friend_list":
 		items := []any{}
-		for _, c := range r.Channel.Conversations() {
+		conversations, err := r.Channel.Conversations()
+		if err != nil {
+			return channelFailure(err, 100, "contacts_unavailable")
+		}
+		for _, c := range conversations {
 			if c.Kind == "group" {
 				continue
 			}
@@ -237,7 +246,31 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 				return fail(1400, "invalid_group_id")
 			}
 		}
-		for _, c := range r.Channel.Conversations() {
+		var conversations []bot.Conversation
+		if want != 0 {
+			ref, ok, e := r.State.resolveChecked(snap.Account, "group", want)
+			if e != nil {
+				return fail(1500, "state_unavailable")
+			}
+			if !ok {
+				return fail(100, "group_unavailable")
+			}
+			c, e := r.Channel.Conversation(snap.Account, ref.Key)
+			if e != nil {
+				return channelFailure(e, 100, "group_unavailable")
+			}
+			if c.Unavailable || c.Kind != "group" {
+				return fail(100, "group_unavailable")
+			}
+			conversations = []bot.Conversation{c}
+		} else {
+			var e error
+			conversations, e = r.Channel.Conversations()
+			if e != nil {
+				return channelFailure(e, 100, "groups_unavailable")
+			}
+		}
+		for _, c := range conversations {
 			if c.Kind != "group" {
 				continue
 			}
@@ -267,12 +300,11 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		if !ok {
 			return fail(100, "user_unavailable")
 		}
-		for _, u := range r.Channel.Users() {
-			if u.ID == ref.Key {
-				return good(map[string]any{"user_id": id, "nickname": u.Name, "sex": "unknown", "age": 0})
-			}
+		user, e := r.Channel.User(snap.Account, ref.Key)
+		if e != nil {
+			return channelFailure(e, 100, "user_unavailable")
 		}
-		return fail(100, "user_unavailable")
+		return good(map[string]any{"user_id": id, "nickname": user.Name, "sex": "unknown", "age": 0})
 	case "get_msg":
 		id, e := paramID(q.Params, "message_id")
 		if e != nil {
@@ -291,11 +323,11 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 				return channelFailure(e, 100, "message_unavailable")
 			}
 			conversation := bot.Conversation{ID: d.Conversation, Kind: "private"}
-			for _, c := range r.Channel.Conversations() {
-				if c.ID == d.Conversation {
-					conversation = c
-					break
-				}
+			c, e := r.Channel.Conversation(snap.Account, d.Conversation)
+			if e == nil {
+				conversation = c
+			} else if !errors.Is(e, bot.ErrNotFound) {
+				return channelFailure(e, 100, "conversation_unavailable")
 			}
 			message := d.Message
 			if len(message) == 0 {
@@ -422,18 +454,18 @@ func (r *Runtime) send(ctx context.Context, q Request, snap bot.Snapshot) Respon
 	if !ok {
 		return fail(100, "target_unavailable")
 	}
-	exists := false
-	for _, c := range r.Channel.Conversations() {
-		if c.ID == ref.Key && ((c.Kind == "group") == group) {
-			exists = true
-			break
-		}
+	conversation, err := r.Channel.Conversation(snap.Account, ref.Key)
+	if err != nil {
+		return channelFailure(err, 100, "target_unavailable")
 	}
-	if !exists {
+	if conversation.Unavailable || ((conversation.Kind == "group") != group) {
 		return fail(100, "target_unavailable")
 	}
 	req, err := r.prepareSend(ctx, q.Params, snap, ref.Key, group)
 	if err != nil {
+		if errors.Is(err, bot.ErrStorage) || errors.Is(err, bot.ErrLimit) {
+			return channelFailure(err, 100, "message_unavailable")
+		}
 		if errors.Is(err, errStateUnavailable) {
 			return fail(1500, "state_unavailable")
 		}

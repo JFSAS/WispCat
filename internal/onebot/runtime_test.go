@@ -37,8 +37,8 @@ func fixture(t *testing.T) (*Runtime, *fakeChannel) {
 	return New(c, state), c
 }
 func (c *fakeChannel) Snapshot() bot.Snapshot { c.mu.Lock(); defer c.mu.Unlock(); return c.snap }
-func (c *fakeChannel) Users() []bot.User {
-	return []bot.User{{ID: "owner", Name: "Bot"}, {ID: "friend", Name: "Friend"}}
+func (c *fakeChannel) Users() ([]bot.User, error) {
+	return []bot.User{{ID: "owner", Name: "Bot"}, {ID: "friend", Name: "Friend"}}, nil
 }
 func (c *fakeChannel) Members(account, conversation string) (bot.Roster, error) {
 	if account != c.Snapshot().Account {
@@ -47,10 +47,11 @@ func (c *fakeChannel) Members(account, conversation string) (bot.Roster, error) 
 	if conversation != "room" {
 		return bot.Roster{}, bot.ErrNotFound
 	}
-	return bot.Roster{Users: c.Users(), Complete: false, Source: "observed_messages"}, nil
+	users, _ := c.Users()
+	return bot.Roster{Users: users, Complete: false, Source: "observed_messages"}, nil
 }
-func (c *fakeChannel) Conversations() []bot.Conversation {
-	return []bot.Conversation{{ID: "friend", Kind: "private", Name: "Friend"}, {ID: "room", Kind: "group", Name: "Group"}}
+func (c *fakeChannel) Conversations() ([]bot.Conversation, error) {
+	return []bot.Conversation{{ID: "friend", Kind: "private", Name: "Friend"}, {ID: "room", Kind: "group", Name: "Group"}}, nil
 }
 func (c *fakeChannel) Events(account string, after uint64, limit int) ([]bot.Event, error) {
 	c.mu.Lock()
@@ -324,4 +325,48 @@ func TestCatalogIsUniqueAndExecutable(t *testing.T) {
 			t.Fatalf("catalog action %s has no implementation", a.Name)
 		}
 	}
+}
+
+func (c *fakeChannel) User(account, id string) (bot.User, error) {
+	if account != c.Snapshot().Account {
+		return bot.User{}, bot.ErrScope
+	}
+	rows, err := c.Users()
+	if err != nil {
+		return bot.User{}, err
+	}
+	for _, row := range rows {
+		if row.ID == id {
+			return row, nil
+		}
+	}
+	return bot.User{}, bot.ErrNotFound
+}
+func (c *fakeChannel) Conversation(account, id string) (bot.Conversation, error) {
+	if account != c.Snapshot().Account {
+		return bot.Conversation{}, bot.ErrScope
+	}
+	rows, err := c.Conversations()
+	if err != nil {
+		return bot.Conversation{}, err
+	}
+	for _, row := range rows {
+		if row.ID == id {
+			return row, nil
+		}
+	}
+	return bot.Conversation{}, bot.ErrNotFound
+}
+
+func (c *fakeChannel) Member(account, conversation, user string) (bot.Membership, error) {
+	roster, err := c.Members(account, conversation)
+	if err != nil {
+		return bot.Membership{}, err
+	}
+	for _, member := range roster.Users {
+		if member.ID == user {
+			return bot.Membership{User: member, Complete: roster.Complete, Source: roster.Source}, nil
+		}
+	}
+	return bot.Membership{}, bot.ErrNotFound
 }

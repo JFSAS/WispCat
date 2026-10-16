@@ -57,6 +57,12 @@ func (r *Runtime) prepareSend(ctx context.Context, params map[string]json.RawMes
 			if !ok {
 				return req, errors.New("mention_unavailable")
 			}
+			if _, err := r.Channel.Member(snap.Account, conversation, ref.Key); err != nil {
+				if errors.Is(err, bot.ErrStorage) || errors.Is(err, bot.ErrLimit) {
+					return req, err
+				}
+				return req, errors.New("group_member_unavailable")
+			}
 			current.Mentions = append(current.Mentions, ref.Key)
 		case "image", "file":
 			flush()

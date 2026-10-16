@@ -45,6 +45,9 @@ type historyInput struct {
 	namespace string
 	raw       protocol.Message
 	event     bot.Event
+	publish   bool
+	observed  bool
+	native    *messaging.Event
 }
 
 // EventHistory owns encrypted durable normalized events and their native media
@@ -53,26 +56,41 @@ type historyInput struct {
 // protocol cursor deduplicates by canonical message ID, independently of native
 // event sequence reuse. The original native cache keeps its existing bounds.
 type EventHistory struct {
-	db           *securedb.DB
-	directory    string
-	writeMu      sync.Mutex
-	closed       bool
-	pending      []historyInput
-	pendingBytes int
-	stageErr     error
-	write        func(func(*securedb.Tx) error) error
-	identity     string
-	unavailable  bool
-	guardWrite   func([]byte) error
-	published    historyMeta
+	db                 *securedb.DB
+	directory          string
+	writeMu            sync.Mutex
+	closed             bool
+	pending            []historyInput
+	pendingBytes       int
+	stageErr           error
+	write              func(func(*securedb.Tx) error) error
+	identity           string
+	unavailable        bool
+	guardWrite         func([]byte) error
+	published          historyMeta
+	publishedDirectory uint64
+	pendingIndex       map[string]int
+	pendingContacts    []historyContact
+	recent             map[string]string
+	workingBytes       int
+	directoryKey       []byte
 }
 
 type HistoryStats struct {
-	Format      string `json:"format"`
-	Messages    uint64 `json:"messages"`
-	FirstCursor uint64 `json:"first_cursor"`
-	Cursor      uint64 `json:"cursor"`
-	FileBytes   int64  `json:"file_bytes"`
+	Format              string `json:"format"`
+	Messages            uint64 `json:"messages"`
+	FirstCursor         uint64 `json:"first_cursor"`
+	Cursor              uint64 `json:"cursor"`
+	FileBytes           int64  `json:"file_bytes"`
+	Users               uint64 `json:"users"`
+	Conversations       uint64 `json:"conversations"`
+	ObservedMembers     uint64 `json:"observed_members"`
+	DirectoryRevision   uint64 `json:"directory_revision"`
+	RawVariants         uint64 `json:"raw_variants"`
+	NativeFragments     uint64 `json:"native_fragments"`
+	WorkingCacheBytes   int    `json:"working_cache_bytes"`
+	WorkingMessageLimit int    `json:"working_message_limit"`
+	WorkingBytesLimit   int    `json:"working_bytes_limit"`
 }
 
 func historyNamespace(data *store.Data) string {
@@ -81,9 +99,10 @@ func historyNamespace(data *store.Data) string {
 }
 
 type historyGuard struct {
-	Schema   int         `json:"schema"`
-	Identity string      `json:"identity"`
-	Meta     historyMeta `json:"meta"`
+	Schema            int         `json:"schema"`
+	Identity          string      `json:"identity"`
+	Meta              historyMeta `json:"meta"`
+	DirectoryRevision uint64      `json:"directory_revision,omitempty"`
 }
 
 func OpenEventHistory(directory string) (*EventHistory, error) {
@@ -100,6 +119,9 @@ func OpenEventHistory(directory string) (*EventHistory, error) {
 			return nil, ErrEventHistory
 		}
 		if json.Unmarshal(raw, &value) != nil || value.Schema != 1 || !mediaID(value.Identity, 64) || !validHistoryMeta(value.Meta) {
+			return nil, ErrEventHistory
+		}
+		if value.Meta.Schema == 2 && (fields["directory_revision"] == nil || string(fields["directory_revision"]) == "null") {
 			return nil, ErrEventHistory
 		}
 		guard = &value
@@ -141,6 +163,12 @@ func OpenEventHistory(directory string) (*EventHistory, error) {
 			if e != nil || !exists || m.First != guard.Meta.First || m.Last < guard.Meta.Last || m.Messages < guard.Meta.Messages {
 				return ErrEventHistory
 			}
+			if guard.Meta.Schema == 2 {
+				dir, ready, e := h.directoryMeta(tx, m.Account, m.Namespace)
+				if e != nil || !ready || dir.Revision < guard.DirectoryRevision {
+					return ErrEventHistory
+				}
+			}
 		}
 		return nil
 	})
@@ -174,18 +202,31 @@ func OpenEventHistory(directory string) (*EventHistory, error) {
 	return h, nil
 }
 func validHistoryMeta(m historyMeta) bool {
-	return m.Schema == 1 && mediaID(m.Account, 64) && mediaID(m.Namespace, 64) && m.First <= m.Last && m.Last-m.First <= m.Messages
+	return (m.Schema == 1 || m.Schema == 2) && mediaID(m.Account, 64) && mediaID(m.Namespace, 64) && m.First <= m.Last && m.Last-m.First <= m.Messages
 }
 func (h *EventHistory) ensureGuard(account string) error {
 	var meta historyMeta
-	err := h.db.View(func(tx *securedb.Tx) error { var e error; meta, _, e = h.meta(tx, account, ""); return e })
+	var directory directoryMeta
+	err := h.db.View(func(tx *securedb.Tx) error {
+		var err error
+		meta, _, err = h.meta(tx, account, "")
+		if err != nil {
+			return err
+		}
+		var ready bool
+		directory, ready, err = h.directoryMeta(tx, account, meta.Namespace)
+		if err != nil || !ready || meta.Schema != 2 {
+			return ErrEventHistory
+		}
+		return nil
+	})
 	if err != nil || !validHistoryMeta(meta) {
 		return ErrEventHistory
 	}
-	if h.published == meta {
+	if h.published == meta && h.publishedDirectory == directory.Revision {
 		return nil
 	}
-	raw, _ := json.Marshal(historyGuard{Schema: 1, Identity: h.identity, Meta: meta})
+	raw, _ := json.Marshal(historyGuard{Schema: 1, Identity: h.identity, Meta: meta, DirectoryRevision: directory.Revision})
 	if h.guardWrite != nil {
 		err = h.guardWrite(raw)
 	} else {
@@ -195,6 +236,7 @@ func (h *EventHistory) ensureGuard(account string) error {
 		return ErrEventHistory
 	}
 	h.published = meta
+	h.publishedDirectory = directory.Revision
 	return nil
 }
 func (h *EventHistory) Close() error {
@@ -230,27 +272,54 @@ func (a BotAdapter) EnableHistory(h *EventHistory) error {
 func (h *EventHistory) stageLocked(s *Service, m protocol.Message, e messaging.Event) {
 	h.writeMu.Lock()
 	defer h.writeMu.Unlock()
+	index, ok := h.stageRawNoLock(s, m)
+	if !ok {
+		return
+	}
+	event := (BotAdapter{Service: s}).eventLocked(m, e.Sequence)
+	event.LocalEcho = e.LocalEcho
+	h.pending[index].event = event
+	h.pending[index].publish = true
+	h.pending[index].observed = true
+	copy := e
+	h.pending[index].native = &copy
+}
+func (h *EventHistory) stageRawLocked(s *Service, m protocol.Message, observed bool) {
+	h.writeMu.Lock()
+	defer h.writeMu.Unlock()
+	if i, ok := h.stageRawNoLock(s, m); ok && observed {
+		h.pending[i].observed = true
+	}
+}
+func (h *EventHistory) stageRawNoLock(s *Service, m protocol.Message) (int, bool) {
 	if h.closed {
 		h.stageErr = ErrEventHistory
 	}
 	if h.stageErr != nil {
-		return
+		return 0, false
 	}
-	// One protocol response is bounded to 4MiB. These independent staging bounds
-	// also prevent repeated failed commits from growing an unbounded memory queue.
+	id := messageKey(m, s.data.Session.Bootstrap.Username)
+	key := s.data.Binding + "/" + id + "/" + rawDigest(m)
+	if h.pendingIndex == nil {
+		h.pendingIndex = map[string]int{}
+	}
+	if i, ok := h.pendingIndex[key]; ok {
+		return i, true
+	}
 	size := len(m.Sender) + len(m.Recipient) + len(m.Content) + len(m.Source)
 	if len(h.pending) >= 250000 || h.pendingBytes+size > 32<<20 {
 		h.stageErr = ErrEventHistory
-		return
+		return 0, false
 	}
 	m.Sender = bytes.Clone(m.Sender)
 	m.Recipient = bytes.Clone(m.Recipient)
 	m.Content = bytes.Clone(m.Content)
 	m.Source = bytes.Clone(m.Source)
-	event := (BotAdapter{Service: s}).eventLocked(m, e.Sequence)
-	event.LocalEcho = e.LocalEcho
-	h.pending = append(h.pending, historyInput{account: s.data.Binding, namespace: historyNamespace(s.data), raw: m, event: event})
+	index := len(h.pending)
+	h.pending = append(h.pending, historyInput{account: s.data.Binding, namespace: historyNamespace(s.data), raw: m, event: (BotAdapter{Service: s}).eventLocked(m, 0)})
 	h.pendingBytes += size
+	h.pendingIndex[key] = index
+	return index, true
 }
 func historyEventKey(db *securedb.DB, account string, sequence uint64) []byte {
 	prefix := db.Key("stream", account)
@@ -322,6 +391,9 @@ func (h *EventHistory) put(tx *securedb.Tx, row historyRecord) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if err = h.indexMessageID(tx, row.Event.Account, row.Event.ID); err != nil {
+		return false, err
+	}
 	if old != nil {
 		return false, nil
 	}
@@ -357,7 +429,11 @@ func (h *EventHistory) importCheckpoint(data *store.Data) error {
 			return err
 		}
 		if exists {
-			return nil
+			updated, _, err := h.upgradeDirectory(tx, s, meta, true)
+			if err != nil {
+				return err
+			}
+			return h.putMeta(tx, updated)
 		}
 		// Missing legacy bodies cannot be reconstructed. Preserve the contiguous
 		// available suffix and its original numbers; earlier cursors fail explicitly.
@@ -396,6 +472,10 @@ func (h *EventHistory) importCheckpoint(data *store.Data) error {
 				meta.Messages++
 			}
 		}
+		meta, _, err = h.upgradeDirectory(tx, s, meta, true)
+		if err != nil {
+			return err
+		}
 		if err = h.putMeta(tx, meta); err != nil {
 			return err
 		}
@@ -405,7 +485,19 @@ func (h *EventHistory) importCheckpoint(data *store.Data) error {
 func (h *EventHistory) persistLocked(s *Service) error {
 	h.writeMu.Lock()
 	defer h.writeMu.Unlock()
-	if h.closed || h.stageErr != nil {
+	if h.closed || h.stageErr != nil || !s.data.ValidBinding() || len(s.data.APIKey) != 32 {
+		h.unavailable = true
+		return ErrEventHistory
+	}
+	for _, message := range s.data.Messages {
+		id := messageKey(message, s.data.Session.Bootstrap.Username)
+		if h.recent[id] != rawDigest(message) {
+			if i, ok := h.stageRawNoLock(s, message); ok {
+				h.pending[i].observed = true
+			}
+		}
+	}
+	if h.stageErr != nil {
 		h.unavailable = true
 		return ErrEventHistory
 	}
@@ -420,10 +512,17 @@ func (h *EventHistory) persistLocked(s *Service) error {
 		}
 		if !exists {
 			meta.First, meta.Last = s.data.EventSequence, s.data.EventSequence
-			if len(h.pending) > 0 {
-				meta.First = h.pending[0].event.Sequence - 1
-				meta.Last = meta.First
+			for _, input := range h.pending {
+				if input.publish {
+					meta.First = input.event.Sequence - 1
+					meta.Last = meta.First
+					break
+				}
 			}
+		}
+		meta, directory, err := h.upgradeDirectory(tx, s, meta, exists)
+		if err != nil {
+			return err
 		}
 		for _, input := range h.pending {
 			if input.account != s.data.Binding || input.namespace != meta.Namespace {
@@ -433,19 +532,58 @@ func (h *EventHistory) persistLocked(s *Service) error {
 			if err != nil {
 				return err
 			}
+			if err = h.indexMessageID(tx, input.account, input.event.ID); err != nil {
+				return err
+			}
+			if input.observed {
+				if err = h.observeMessage(tx, s, &directory, input.raw); err != nil {
+					return err
+				}
+			}
+			if input.native != nil {
+				if err = h.retainFragment(tx, &directory, *input.native); err != nil {
+					return err
+				}
+			}
 			if old != nil {
+				before, _ := json.Marshal(old.Raw)
+				after, _ := json.Marshal(input.raw)
+				if !bytes.Equal(before, after) {
+					if err = h.retainVariant(tx, &directory, input.event.ID, input.raw); err != nil {
+						return err
+					}
+				}
 				continue
 			}
-			if meta.Last == math.MaxUint64 {
-				return ErrEventHistory
-			}
-			meta.Last++
 			event := input.event
-			event.Sequence = meta.Last
+			event.Sequence = 0
+			if input.publish {
+				if meta.Last == math.MaxUint64 {
+					return ErrEventHistory
+				}
+				meta.Last++
+				event.Sequence = meta.Last
+			}
 			if _, err = h.put(tx, historyRecord{Schema: 1, Event: event, Raw: input.raw}); err != nil {
 				return err
 			}
 			meta.Messages++
+		}
+		for _, input := range h.pendingContacts {
+			if input.account != s.data.Binding || input.namespace != directory.Namespace {
+				return ErrEventHistory
+			}
+			if err = h.observeContact(tx, s, &directory, input.contact); err != nil {
+				return err
+			}
+		}
+		for _, event := range s.data.Events {
+			if err = h.retainFragment(tx, &directory, event); err != nil {
+				return err
+			}
+		}
+		if err = h.putDirectoryMeta(tx, directory); err != nil {
+			return err
 		}
 		return h.putMeta(tx, meta)
 	})
@@ -459,9 +597,19 @@ func (h *EventHistory) persistLocked(s *Service) error {
 		h.unavailable = true
 		return ErrEventHistory
 	}
+	if err = h.compactWorkingLocked(s); err != nil {
+		h.unavailable = true
+		return err
+	}
 	h.unavailable = false
 	h.pending = nil
+	h.pendingIndex = nil
+	h.pendingContacts = nil
 	h.pendingBytes = 0
+	h.recent = map[string]string{}
+	for _, message := range s.data.Messages {
+		h.recent[messageKey(message, s.data.Session.Bootstrap.Username)] = rawDigest(message)
+	}
 	return nil
 }
 func (h *EventHistory) Stats(account string) (HistoryStats, error) {
@@ -470,16 +618,24 @@ func (h *EventHistory) Stats(account string) (HistoryStats, error) {
 	if h.closed || h.unavailable || h.stageErr != nil {
 		return HistoryStats{}, ErrEventHistory
 	}
-	result := HistoryStats{Format: "encrypted_event_history_v1"}
+	result := HistoryStats{Format: "encrypted_event_history_v2", WorkingCacheBytes: h.workingBytes, WorkingMessageLimit: historyWorkingEntries, WorkingBytesLimit: historyWorkingBytes}
 	err := h.db.View(func(tx *securedb.Tx) error {
 		if account == "" {
 			return nil
 		}
-		meta, _, err := h.meta(tx, account, "")
+		meta, exists, err := h.meta(tx, account, "")
 		if err == nil && h.published.Account == account && meta != h.published {
 			return ErrEventHistory
 		}
 		result.Messages, result.FirstCursor, result.Cursor = meta.Messages, meta.First, meta.Last
+		if err == nil && exists {
+			dir, ready, e := h.directoryMeta(tx, account, meta.Namespace)
+			if e != nil || !ready || meta.Schema != 2 || dir.Revision != h.publishedDirectory {
+				return ErrEventHistory
+			}
+			result.Users, result.Conversations, result.ObservedMembers, result.DirectoryRevision = dir.Users, dir.Conversations, dir.Members, dir.Revision
+			result.RawVariants, result.NativeFragments = dir.Variants, dir.Fragments
+		}
 		return err
 	})
 	if err != nil {

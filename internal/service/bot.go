@@ -60,13 +60,46 @@ func (a BotAdapter) Snapshot() bot.Snapshot {
 	}
 	return v
 }
-func (a BotAdapter) Conversations() []bot.Conversation {
+func (a BotAdapter) Conversations() ([]bot.Conversation, error) {
+	s := a.Service
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	result := []bot.Conversation{}
-	for _, c := range a.Service.Conversations() {
-		result = append(result, bot.Conversation{ID: c.ID, Kind: c.Kind, Name: c.Label})
+	if !s.mediaScopeLocked() {
+		return result, nil
+	}
+	if s.history != nil {
+		entries, err := s.history.directoryList(s.data.Binding, "conversations", "")
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			result = append(result, bot.Conversation{ID: entry.ID, Kind: entry.Kind, Name: entry.Name})
+		}
+	} else {
+		for id, peer := range s.peersLocked() {
+			result = append(result, bot.Conversation{ID: id, Kind: conversationKind(peer), Name: s.labelLocked(peer)})
+		}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-	return result
+	return result, nil
+}
+func (a BotAdapter) Conversation(account, id string) (bot.Conversation, error) {
+	s := a.Service
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.mediaScopeLocked() || account != s.data.Binding {
+		return bot.Conversation{}, bot.ErrScope
+	}
+	if s.history != nil {
+		row, _, err := s.history.conversation(account, id)
+		return row, err
+	}
+	raw, ok := s.peersLocked()[id]
+	if !ok {
+		return bot.Conversation{}, bot.ErrNotFound
+	}
+	return bot.Conversation{ID: id, Kind: conversationKind(raw), Name: s.labelLocked(raw)}, nil
 }
 func (a BotAdapter) usersLocked() map[string][]byte {
 	s := a.Service
@@ -96,16 +129,45 @@ func (a BotAdapter) usersLocked() map[string][]byte {
 	add([]byte("filehelper"))
 	return result
 }
-func (a BotAdapter) Users() []bot.User {
+func (a BotAdapter) Users() ([]bot.User, error) {
 	s := a.Service
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := []bot.User{}
-	for id, u := range a.usersLocked() {
-		result = append(result, bot.User{ID: id, Name: s.labelLocked(u)})
+	if !s.mediaScopeLocked() {
+		return result, nil
+	}
+	if s.history != nil {
+		entries, err := s.history.directoryList(s.data.Binding, "users", "")
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			result = append(result, bot.User{ID: entry.ID, Name: entry.Name})
+		}
+	} else {
+		for id, raw := range a.usersLocked() {
+			result = append(result, bot.User{ID: id, Name: s.labelLocked(raw)})
+		}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-	return result
+	return result, nil
+}
+func (a BotAdapter) User(account, id string) (bot.User, error) {
+	s := a.Service
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.mediaScopeLocked() || account != s.data.Binding {
+		return bot.User{}, bot.ErrScope
+	}
+	if s.history != nil {
+		return s.history.user(account, id)
+	}
+	raw, ok := a.usersLocked()[id]
+	if !ok {
+		return bot.User{}, bot.ErrNotFound
+	}
+	return bot.User{ID: id, Name: s.labelLocked(raw)}, nil
 }
 func (a BotAdapter) Members(account, conversation string) (bot.Roster, error) {
 	s := a.Service
@@ -114,6 +176,33 @@ func (a BotAdapter) Members(account, conversation string) (bot.Roster, error) {
 	result := bot.Roster{Users: []bot.User{}, Complete: false, Source: "observed_messages"}
 	if !s.mediaScopeLocked() || s.data.Binding != account {
 		return result, bot.ErrScope
+	}
+	if s.history != nil {
+		room, _, err := s.history.conversation(account, conversation)
+		if err != nil {
+			return result, err
+		}
+		if room.Kind != "group" || room.Unavailable {
+			return result, bot.ErrNotFound
+		}
+		users, err := s.history.members(account, conversation, s.sessionID(s.data.Session.Bootstrap.Username))
+		if err != nil {
+			return result, err
+		}
+		own := s.sessionID(s.data.Session.Bootstrap.Username)
+		found := false
+		for _, u := range users {
+			if u.ID == own {
+				found = true
+				break
+			}
+		}
+		if !found {
+			users = append(users, bot.User{ID: own, Name: "我"})
+		}
+		sort.Slice(users, func(i, j int) bool { return users[i].ID < users[j].ID })
+		result.Users, result.Source = users, "observed_history"
+		return result, nil
 	}
 	room, exists := s.groupRoomsLocked()[conversation]
 	if !exists {

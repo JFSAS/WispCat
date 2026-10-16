@@ -59,6 +59,9 @@ func TestHistoryCapturesWholeSyncBeyondNativeWindow(t *testing.T) {
 	if err := s.saveLocked(); err != nil {
 		t.Fatal(err)
 	}
+	if len(s.data.Messages) > historyWorkingEntries || len(s.data.Events) > historyWorkingEntries || h.workingBytes > historyWorkingBytes {
+		t.Fatal("retained native cache did not compact")
+	}
 	snap := a.Snapshot()
 	if snap.Cursor != count || snap.FirstCursor != 0 || snap.Error != "" {
 		t.Fatal(snap)

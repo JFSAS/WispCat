@@ -69,7 +69,7 @@ def main():
                         assert status[counter] == 0, status
                     assert status['connection']['disk_read'] == 'not_attempted', status
                     history = get(base + '/accounts/' + row['name'] + '/history', env['FIXTURE_ADMIN_TOKEN'])
-                    assert history['format'] == 'encrypted_event_history_v1' and history['messages'] == 0 and history['cursor'] == 0, history
+                    assert history['format'] == 'encrypted_event_history_v2' and history['messages'] == 0 and history['cursor'] == 0, history
                     response = get('http://' + row['onebot_address'] + '/get_status', env['FIXTURE_BOT_TOKEN'])
                     assert response['retcode'] == 0 and response['data']['online'] is False, response
                     summaries.append({'name': row['name'], 'mode': status['mode'],

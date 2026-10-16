@@ -146,22 +146,23 @@ func (a BotAdapter) Submit(ctx context.Context, r bot.Send) (bot.Delivery, error
 		return bot.Delivery{}, bot.ErrUnavailable
 	}
 	peer, ok := s.peersLocked()[r.Conversation]
+	if s.history != nil {
+		conversation, raw, err := s.history.conversation(r.Account, r.Conversation)
+		if err != nil {
+			return bot.Delivery{}, err
+		}
+		if conversation.Unavailable {
+			return bot.Delivery{}, bot.ErrNotFound
+		}
+		peer, ok = raw, true
+	}
 	if !ok {
 		return bot.Delivery{}, bot.ErrNotFound
 	}
-	users := a.usersLocked()
 	prepared := make([]preparedOutput, 0, len(outputs))
 	// Complete semantic validation before staging any media or queue entry.
 	for _, out := range outputs {
-		var aliases []string
-		for _, id := range out.Mentions {
-			user, ok := users[id]
-			if !ok {
-				return bot.Delivery{}, bot.ErrNotFound
-			}
-			aliases = append(aliases, s.groupMemberID(peer, user))
-		}
-		raw, prefix, e := s.resolveMentionsLocked(peer, aliases)
+		raw, prefix, e := a.resolveBotMentionsLocked(peer, out.Mentions)
 		if e != nil {
 			return bot.Delivery{}, e
 		}

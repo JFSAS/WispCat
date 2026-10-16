@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -121,5 +122,19 @@ func TestOutgoingGroupGetMsgKeepsConversationKind(t *testing.T) {
 	v := message.Data.(map[string]any)
 	if v["message_type"] != "group" || v["group_id"] != id {
 		t.Fatal("outgoing group message became private", v)
+	}
+}
+
+func TestGroupMembershipValidationPrecedesMediaFetch(t *testing.T) {
+	r, c := fixture(t)
+	var fetches atomic.Int32
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fetches.Add(1); w.Write([]byte("synthetic")) }))
+	defer peer.Close()
+	group, _ := r.State.ID("account-a", "group", "room")
+	stranger, _ := r.State.ID("account-a", "user", "not-observed-in-room")
+	raw, _ := json.Marshal(map[string]any{"group_id": group, "message": []bot.Segment{{Type: "image", Data: map[string]string{"file": peer.URL}}, {Type: "at", Data: map[string]string{"qq": strconv.FormatInt(stranger, 10)}}}})
+	got := invoke(t, r, "send_group_msg", string(raw))
+	if got.Retcode == 0 || fetches.Load() != 0 || len(c.sends) != 0 {
+		t.Fatal("invalid group mention fetched media or sent", got, fetches.Load())
 	}
 }

@@ -15,6 +15,7 @@ var (
 	ErrConflict    = errors.New("idempotency_conflict")
 	ErrNotFound    = errors.New("not_found")
 	ErrStorage     = errors.New("runtime_storage_unavailable")
+	ErrLimit       = errors.New("result_size_limit")
 )
 
 type User struct {
@@ -22,12 +23,18 @@ type User struct {
 	Name string `json:"name"`
 }
 type Conversation struct {
-	ID   string `json:"id"`
-	Kind string `json:"kind"`
-	Name string `json:"name"`
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name"`
+	Unavailable bool   `json:"unavailable,omitempty"`
 }
 type Roster struct {
 	Users    []User `json:"users"`
+	Complete bool   `json:"complete"`
+	Source   string `json:"source"`
+}
+type Membership struct {
+	User     User   `json:"user"`
 	Complete bool   `json:"complete"`
 	Source   string `json:"source"`
 }
@@ -96,9 +103,12 @@ type Content struct {
 // automatically. Key is idempotent within Account, independently of Epoch.
 type Channel interface {
 	Snapshot() Snapshot
-	Users() []User
+	Users() ([]User, error)
+	User(account, id string) (User, error)
 	Members(account, conversation string) (Roster, error)
-	Conversations() []Conversation
+	Member(account, conversation, user string) (Membership, error)
+	Conversations() ([]Conversation, error)
+	Conversation(account, id string) (Conversation, error)
 	Events(account string, after uint64, limit int) ([]Event, error)
 	Message(account, id string) (Event, error)
 	Submit(context.Context, Send) (Delivery, error)

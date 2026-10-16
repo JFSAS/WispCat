@@ -119,3 +119,40 @@ func TestStorageSnapshotFailurePrecedesConnectionAndCursorEffects(t *testing.T) 
 		t.Fatal("unavailable history advanced a consumer or connected", stats, requests.Load(), err)
 	}
 }
+
+type unavailableDirectoryChannel struct{ *fakeChannel }
+
+func (c unavailableDirectoryChannel) Users() ([]bot.User, error) { return nil, bot.ErrStorage }
+func (c unavailableDirectoryChannel) Conversations() ([]bot.Conversation, error) {
+	return nil, bot.ErrStorage
+}
+func (c unavailableDirectoryChannel) User(string, string) (bot.User, error) {
+	return bot.User{}, bot.ErrStorage
+}
+func (c unavailableDirectoryChannel) Conversation(string, string) (bot.Conversation, error) {
+	return bot.Conversation{}, bot.ErrStorage
+}
+func (c unavailableDirectoryChannel) Member(string, string, string) (bot.Membership, error) {
+	return bot.Membership{}, bot.ErrStorage
+}
+func TestDirectoryErrorsRemainStorageFailuresAcrossOneBotActions(t *testing.T) {
+	r, c := fixture(t)
+	r.Channel = unavailableDirectoryChannel{c}
+	user, _ := r.State.ID("account-a", "user", "friend")
+	group, _ := r.State.ID("account-a", "group", "room")
+	for _, tc := range []struct{ action, params string }{
+		{"get_friend_list", `{}`}, {"get_group_list", `{}`},
+		{"get_group_info", fmt.Sprintf(`{"group_id":%d}`, group)},
+		{"get_group_member_info", fmt.Sprintf(`{"group_id":%d,"user_id":%d}`, group, user)},
+		{"get_stranger_info", fmt.Sprintf(`{"user_id":%d}`, user)},
+		{"send_private_msg", fmt.Sprintf(`{"user_id":%d,"message":"hello"}`, user)},
+	} {
+		got := invoke(t, r, tc.action, tc.params)
+		if got.Retcode != 1500 || got.Message != "runtime_storage_unavailable" {
+			t.Fatal(tc.action, got)
+		}
+	}
+	if len(c.sends) != 0 {
+		t.Fatal("directory failure queued a send")
+	}
+}

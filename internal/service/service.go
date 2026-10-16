@@ -292,6 +292,11 @@ func (s *Service) prepare(online, fresh bool) error {
 	s.restored = exists
 	s.sessionState = "unverified"
 	s.connection.Stage = "ready"
+	if s.history != nil && data != nil {
+		if err := s.history.restoreRuntimeLocked(s); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 func (s *Service) block(err error) {
@@ -551,6 +556,9 @@ func (s *Service) updateContactsLocked(changes []protocol.Contact) {
 	if s.data == nil {
 		return
 	}
+	if s.history != nil {
+		s.history.stageContactsLocked(s, changes)
+	}
 	contacts := map[string]protocol.Contact{}
 	for _, c := range s.data.Contacts {
 		contacts[string(c.Username)] = c
@@ -609,6 +617,9 @@ func (s *Service) ingestLocked(r protocol.SyncResult) {
 	}
 	for _, m := range r.Messages {
 		key := messageKey(m, owner)
+		if s.history != nil {
+			s.history.stageRawLocked(s, m, !seen[key])
+		}
 		if !seen[key] {
 			s.data.Messages = append(s.data.Messages, m)
 			seen[key] = true

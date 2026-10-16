@@ -59,7 +59,7 @@ func TestArchiveManagementAuthenticationAndOwnership(t *testing.T) {
 			t.Fatal(tc.method, tc.path, response.Code, response.Body.String())
 		}
 		if tc.code == 200 {
-			if strings.HasSuffix(tc.path, "/history") && !strings.Contains(response.Body.String(), `"format":"encrypted_event_history_v1"`) {
+			if strings.HasSuffix(tc.path, "/history") && !strings.Contains(response.Body.String(), `"format":"encrypted_event_history_v2"`) {
 				t.Fatal("missing history diagnostics", response.Body.String())
 			}
 			var stats struct {
