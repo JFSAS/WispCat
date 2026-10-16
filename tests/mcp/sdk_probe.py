@@ -16,7 +16,7 @@ import socket
 import subprocess
 import tempfile
 
-from mcp import ClientSession,StdioServerParameters
+from mcp import ClientSession,StdioServerParameters,types
 from mcp.client import stdio
 from pydantic import AnyUrl
 
@@ -24,6 +24,7 @@ from source_capture import ROOT,load_checked
 from stdio_probe import ADMIN,BOT,CONTROL,digest,wait_for
 from offline_api import request_json
 from probe_cleanup import close_host
+from stall_fixture import StalledOneBot
 
 
 async def run():
@@ -139,6 +140,35 @@ async def run():
             await tool(session,'invoke_action','clean_stream_temp_file')
             checks.append('owner reference still valid after sibling refusal, then explicit cleanup')
         await session_check('write',endpoints['synthetic-a'],downloads,verify_owner_then_clean)
+        cancelled_dir=temp/'cancelled-downloads'
+        with StalledOneBot() as stall:
+            async def cancel_in_flight(session):
+                # Read-only observation of this pinned SDK's next ID addresses
+                # the actual public cancellation notification; no ID or stream
+                # assignment, parser or response is replaced.
+                request_id=session._request_id
+                task=asyncio.create_task(tool(session,'invoke_action','download_file_stream',{'file':'synthetic-stall'}))
+                try:
+                    assert await asyncio.to_thread(stall.started.wait,5)
+                    await asyncio.wait_for(session.send_ping(),3)
+                    login=await asyncio.wait_for(tool(session,'query_action','get_login_info'),3)
+                    assert login['data']['user_id']==123
+                    await session.send_notification(types.ClientNotification(types.CancelledNotification(params=types.CancelledNotificationParams(requestId=request_id))))
+                    assert await asyncio.to_thread(stall.cancelled.wait,5)
+                    for _ in range(100):
+                        if not list(cancelled_dir.glob('*.part')):break
+                        await asyncio.sleep(.05)
+                    assert not list(cancelled_dir.glob('*.part')) and not list(cancelled_dir.glob('*.bin'))
+                    assert not task.done(),'cancelled request emitted a late result'
+                    checks.append('concurrent ping/action while download stalls; actual cancellation notification closes HTTP and removes partial without a late response')
+                finally:
+                    task.cancel();await asyncio.gather(task,return_exceptions=True)
+            await session_check('write',stall.url,cancelled_dir,cancel_in_flight)
+        async def cancelled_owner_reopen(session):
+            assert not list(cancelled_dir.glob('*.part')) and not list(cancelled_dir.glob('*.bin'))
+            status=await tool(session,'query_action','get_status');assert status['data']['good']
+            checks.append('cancelled file owner reopens without partials or lock leak')
+        await session_check('write',endpoints['synthetic-a'],cancelled_dir,cancelled_owner_reopen)
         assert not escalations,escalations
         for row in request_json(points['management']+'/accounts',ADMIN):
             for key in ['auth_calls','sync_calls','send_calls','contact_list_calls','contact_brief_calls']:assert row['status'][key]==0
@@ -149,11 +179,12 @@ async def run():
             'scope':'Actual ClientSession/stdio transport/schema validation against Go MCP and separate Host/OneBot synthetic account fixture',
             'checks':checks,'negotiated_protocol_versions':negotiated,'sdk_processes':len(sdk_processes),'sdk_process_exit_codes':[process.returncode for process in sdk_processes],
             'sdk_termination_escalations':len(escalations),'instrumentation':'Transparent observation of actual SDK subprocess create/termination; no transport/session/schema/response replacement',
+            'request_dispatch':{'concurrent_ping_and_action_during_stalled_download':True,'cancellation_notification_closed_http_and_removed_partial':True,'cancelled_owner_reopened':True,'request_id_observation':'Read only next-ID counter of pinned SDK to address the public cancellation notification'},
             'files':[{'bytes':item['bytes'],'sha256':item['sha256'],'frames':item['frames']} for item in files],
             'mcp_source_path':'reports/mcp-source-'+source_sha+'.json','mcp_source_sha256':source_sha,'runtime_input_files':len(capture['runtime_inputs']),
             'binaries_sha256':hashes,'binary_snapshot':'private0500 executable copies checked before/after',
             'live_wechat_or_model_requests':0,'native_protocol_session_started':False,
-            'limits':['Only the recorded SDK version/platform','No asynchronous cancellation notification or concurrent-dispatch claim','16MiB native ceiling; no live platform or model operation']}
+            'limits':['Only the recorded SDK version/platform','At most8 active tools per session; local file operations remain serial; cancellation cannot undo committed runtime/platform effects','16MiB native ceiling; no live platform or model operation']}
     finally:
         stdio._create_platform_compatible_process=original_create;stdio._terminate_process_tree=original_terminate
         close_host(host,host_output,reserve,temp)

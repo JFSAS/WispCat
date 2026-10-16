@@ -3,7 +3,6 @@
 package mcp
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -42,63 +41,9 @@ func (s *Server) Run(ctx context.Context, input io.Reader, output io.Writer) err
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	scanner := bufio.NewScanner(input)
-	scanner.Buffer(make([]byte, 4096), 1<<20)
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	lines := make(chan []byte)
-	readError := make(chan error, 1)
-	go func() {
-		defer func() { readError <- scanner.Err(); close(lines) }()
-		for scanner.Scan() {
-			line := bytes.Clone(scanner.Bytes())
-			select {
-			case lines <- line:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	encoder := json.NewEncoder(output)
-	for {
-		var line []byte
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case value, ok := <-lines:
-			if !ok {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				return <-readError
-			}
-			line = value
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		var q request
-		if json.Unmarshal(line, &q) != nil || q.Version != "2.0" {
-			if err := encoder.Encode(response{Version: "2.0", ID: json.RawMessage("null"), Error: map[string]any{"code": -32700, "message": "invalid_json_rpc"}}); err != nil {
-				return err
-			}
-			continue
-		}
-		if q.ID == nil {
-			continue
-		}
-		out := response{Version: "2.0", ID: q.ID}
-		result, err := s.handle(ctx, q)
-		if err != nil {
-			out.Error = map[string]any{"code": -32602, "message": err.Error()}
-		} else {
-			out.Result = result
-		}
-		if err = encoder.Encode(out); err != nil {
-			return err
-		}
-	}
+	return s.serve(ctx, input, output)
 }
+
 func (s *Server) handle(ctx context.Context, q request) (any, error) {
 	switch q.Method {
 	case "initialize":

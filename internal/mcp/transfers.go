@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -37,7 +36,7 @@ type TransferConfig struct {
 // Transfers serializes local file operations and holds an exclusive directory
 // lock. os.Root pins both directories and prevents path/symlink escapes.
 type Transfers struct {
-	mu            sync.Mutex
+	gate          chan struct{}
 	directory     string
 	root, upload  *os.Root
 	lock          *os.File
@@ -77,7 +76,7 @@ func OpenTransfers(config TransferConfig) (result *Transfers, err error) {
 	if err != nil {
 		return nil, errTransferStorage
 	}
-	t := &Transfers{directory: directory, max: config.MaxFileBytes, timeout: config.Timeout}
+	t := &Transfers{gate: make(chan struct{}, 1), directory: directory, max: config.MaxFileBytes, timeout: config.Timeout}
 	defer func() {
 		if err != nil {
 			_ = t.Close()
@@ -262,8 +261,11 @@ func (t *Transfers) sameDirectory() bool {
 }
 
 func (t *Transfers) Close() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	if t.gate == nil {
+		return errTransferStorage
+	}
+	t.gate <- struct{}{}
+	defer func() { <-t.gate }()
 	if t.closed {
 		return nil
 	}
@@ -291,15 +293,22 @@ type transferResult struct {
 }
 
 func (t *Transfers) call(ctx context.Context, c *client.Client, action string, params map[string]any, input string) (transferResult, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.closed || t.failed {
+	if t.gate == nil {
 		return transferResult{}, errTransferStorage
 	}
 	ctx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
+	select {
+	case t.gate <- struct{}{}:
+		defer func() { <-t.gate }()
+	case <-ctx.Done():
+		return transferResult{}, ctx.Err()
+	}
 	if err := ctx.Err(); err != nil {
 		return transferResult{}, err
+	}
+	if t.closed || t.failed {
+		return transferResult{}, errTransferStorage
 	}
 	if input != "" {
 		result, err := t.uploadFile(ctx, c, params, input)
