@@ -35,6 +35,40 @@ macOS 与 Linux 使用同一套 macOS 4.1.13 兼容协议身份。原生 Windows
 Dockerfile 使用非 root 用户；状态卷挂载到 `/home/runtime`。监听地址限定回环，
 Linux Docker 可按部署环境使用 host networking，单独发布端口不能访问容器回环地址。
 
+## 从 Mac 提取，在 Linux 上传登录
+
+Mac 上的提取工具直接复用原 main 的磁盘读取、安装指纹和完整性校验，
+当前支持已核实的微信 4.1.13（269602）。它只生成加密文件，不连接微信。
+在 Mac 默认 zsh 中执行：
+
+```zsh
+sh tools/go.sh build -o .bin/wechat-credentials ./cmd/wechat-credentials
+read -rs 'WECHAT_CREDENTIAL_PASSPHRASE?导出密码（至少16字节）：'
+echo
+export WECHAT_CREDENTIAL_PASSPHRASE
+./.bin/wechat-credentials --app /Applications/WeChat.app --out ~/Desktop/wechat-login.wxlogin
+unset WECHAT_CREDENTIAL_PASSPHRASE
+```
+
+输出文件权限为 `0600`，已有同名文件会拒绝覆盖。使用其他安装时修改 `--app`；
+也可以用 `--passphrase-env` 指定密码环境变量。文件不包含本项目的私有缓存密钥。
+
+Linux 启动新版运行时后，通过 SSH 转发访问其回环管理端口：
+
+```sh
+ssh -N -L 127.0.0.1:5099:127.0.0.1:5099 user@linux-host
+```
+
+在 Mac 打开 `http://127.0.0.1:5099/`，输入管理令牌并刷新账号；在目标账号的
+“从 Mac 凭证文件登录”中选择 `.wxlogin` 文件、输入导出密码，再点击“上传凭证登录”。
+转发两端使用相同端口，浏览器地址使用 `127.0.0.1`，以通过管理接口的 Host 校验。
+
+上传仅表示请求已接受；后台完成原协议鉴权和首次同步后才显示“已连接”。
+失败时显示错误类别，不自动重复鉴权。不同微信账号必须使用不同账号实例；
+同账号重新导入会保留原缓存命名空间、编号和历史。成功后使用运行时自己的加密缓存恢复。
+文件最多 1 MiB，以 AES-256-GCM 加密，密码经 PBKDF2-SHA256（600,000 次）派生。
+文件和解密密码通过 SSH 隧道上传，管理页不将它们写入浏览器持久存储。
+
 ## 接入机器人
 
 反向 WebSocket 的 `reverse[].url` 指向下游框架；`token_env` 对应下游框架的令牌。
@@ -84,6 +118,7 @@ SDK 支持调用、事件、上传和下载；下载校验完整字节及 SHA256
 | 路径 | 用途 |
 | --- | --- |
 | `/accounts`、`/storage` | 账号和存储状态 |
+| `/accounts/<name>/login/import` | POST multipart：`file` 与 `passphrase`，接受后返回 202；通过账号状态查看鉴权结果 |
 | `/accounts/<name>/listener`、`/accounts/<name>/connections` | GET 查看，POST 保存，POST `<path>/apply` 应用 |
 | `/listeners`、`/listeners/apply` | 查看整体监听修订，携带修订应用全部已保存监听，支持端口交换 |
 | `/topology`、`/topology/apply` | 保存、应用账号成员列表；停用保留数据和编号 |

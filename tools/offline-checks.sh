@@ -14,5 +14,5 @@ else
   sh tools/go.sh test -race -count=1 ./...
 fi
 sh tools/go.sh vet ./...
-sh tools/go.sh build -trimpath ./cmd/wechat-runtime ./cmd/wechat-mcp ./examples/echo
+sh tools/go.sh build -trimpath ./cmd/wechat-runtime ./cmd/wechat-mcp ./cmd/wechat-credentials ./examples/echo
 git diff --check

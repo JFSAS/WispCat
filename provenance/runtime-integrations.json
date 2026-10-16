@@ -1,10 +1,10 @@
 {
   "internal/service/service.go": {
-    "reason": "Attach runtime history, stage contacts/raw messages before eviction, restore persisted availability for queued work, and commit history plus directory before checkpoint compaction. Wire/session/client code remains intact. Large contact checkpoints explicitly depend on the encrypted directory; serialization temporarily omits only the committed roster and restores the live data on every exit.",
+    "reason": "Attach runtime history, stage contacts/raw messages before eviction, restore persisted availability for queued work, and commit history plus directory before checkpoint compaction. Wire/session/client code remains intact. Large contact checkpoints explicitly depend on the encrypted directory; serialization temporarily omits only the committed roster and restores the live data on every exit. Admit portable credential login to the same serial worker; authentication and first Sync use the original protocol before history-aware adoption.",
     "insertions": [
       {
         "before_line": 58,
-        "text": "\thistory                       *EventHistory // optional independent runtime persistence\n"
+        "text": "\thistory                       *EventHistory // optional independent runtime persistence\n\tcredential                    *credentialLogin\n\tcredentialAuth                func(context.Context, *protocol.Client) error\n\tcredentialClosed              bool\n"
       },
       {
         "before_line": 166,
@@ -13,6 +13,14 @@
       {
         "before_line": 289,
         "text": "\tif err := serializedContactCheckpoint(data); err != nil {\n\t\treturn err\n\t}\n\tif err := contactCheckpointDependency(data, s.history); err != nil {\n\t\treturn err\n\t}\n\tif s.history != nil && data != nil {\n\t\tif err := s.history.restoreRuntimeLocked(s); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n"
+      },
+      {
+        "before_line": 364,
+        "text": "\tdefer s.discardCredentialLogin()\n"
+      },
+      {
+        "before_line": 368,
+        "text": "\t\tif s.credentialLoginPending() {\n\t\t\ts.workCredentialLogin(ctx)\n\t\t\tprepared = true\n\t\t\trecovery = sessionRecovery{}\n\t\t\tcontinue\n\t\t}\n"
       },
       {
         "before_line": 548,

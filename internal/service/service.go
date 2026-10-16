@@ -56,6 +56,9 @@ type Service struct {
 	loginFactory                  func() (loginEngine, error)
 	loginValidate                 func(context.Context, *protocol.Client) (protocol.SyncResult, error)
 	history                       *EventHistory // optional independent runtime persistence
+	credential                    *credentialLogin
+	credentialAuth                func(context.Context, *protocol.Client) error
+	credentialClosed              bool
 }
 
 // Reserve a distinct epoch range for each runtime, including instances with
@@ -383,10 +386,17 @@ func (s *Service) blockLocked(err error) {
 }
 func (s *Service) run(ctx context.Context) {
 	defer close(s.done)
+	defer s.discardCredentialLogin()
 	prepared := false
 	recovery := sessionRecovery{}
 	scene := uint32(2)
 	for ctx.Err() == nil {
+		if s.credentialLoginPending() {
+			s.workCredentialLogin(ctx)
+			prepared = true
+			recovery = sessionRecovery{}
+			continue
+		}
 		s.mu.Lock()
 		if s.applyPendingAppLocked() {
 			prepared = false
