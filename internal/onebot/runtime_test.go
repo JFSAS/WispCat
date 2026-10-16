@@ -134,6 +134,9 @@ func (c *fakeChannel) Delivery(account, id string) (bot.Delivery, error) {
 	}
 	return d, nil
 }
+func (c *fakeChannel) DeliveryByRequest(account, key string) (bot.Delivery, error) {
+	return c.Delivery(account, key)
+}
 func (c *fakeChannel) Download(context.Context, string, string, string) (bot.Content, error) {
 	return bot.Content{}, bot.ErrUnsupported
 }

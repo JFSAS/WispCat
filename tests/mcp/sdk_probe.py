@@ -95,7 +95,7 @@ async def run():
                 assert not value.isError and len(value.content)==1 and value.content[0].type=='text'
                 return json.loads(value.content[0].text)
             all_actions=await catalog_call('list_actions',{})
-            assert isinstance(all_actions,list) and len(all_actions)==22
+            assert isinstance(all_actions,list) and len(all_actions)==23
             assert json.loads(data.contents[0].text)==all_actions
             categories=await catalog_call('list_categories',{})
             assert sum(item['count'] for item in categories)==len(all_actions)

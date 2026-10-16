@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'framework'))
 from stream_probe import probe
 from media_probe import probe as media_probe
 from crash_reply import source_for
+from receipt_reply import enabled as receipt_enabled,request_for as receipt_request
 
 report = Path(os.environ['FRAMEWORK_REPORT'])
 nonebot.init(driver='~fastapi', host='127.0.0.1', port=int(os.environ['FRAMEWORK_PORT']),
@@ -65,8 +66,9 @@ matcher = on_message(priority=1, block=True)
 async def reply(bot: Bot, event: MessageEvent):
     text = event.get_plaintext().strip()
     crash_source = source_for(text)
+    receipt = receipt_enabled(text)
     media = [part for part in event.message if part.type in ('image','file')]
-    if not media and not crash_source and text not in ('/private-ping', '/group-ping'):
+    if not media and not crash_source and not receipt and text not in ('/private-ping', '/group-ping'):
         return
     login, status = await bot.get_login_info(), await bot.get_status()
     assert int(login['user_id']) == int(bot.self_id)
@@ -78,7 +80,24 @@ async def reply(bot: Bot, event: MessageEvent):
         assert member['user_id'] == event.user_id and member['wechat_roster_complete'] is False
         assert event.is_tome()
     extra = {}
-    if crash_source:
+    if receipt:
+        params,record=receipt_request(text,event.self_id,event.user_id,event.sender.nickname)
+        state['receipt_attempt']={'command':text,'record':record,'received_message_id':event.message_id}
+        state['receipt_pending']=True
+        save()
+        try:
+            if text=='/receipt-retry':
+                state['receipt_lookup']=await bot.call_api('wechat_get_delivery_by_request',self_id=params['self_id'],wechat_request_id=params['wechat_request_id'])
+                save()
+            result=await bot.call_api('send_private_msg',**params)
+        except Exception as error:
+            state['receipt_pending']=False;state['receipt_error']=type(error).__name__;save()
+            raise
+        state['receipt_pending']=False
+        state.setdefault('receipt_results',[]).append({'command':text,'record':record,'result':result})
+        save()
+        return
+    elif crash_source:
         state['crash_attempt'] = {'self_id': event.self_id, 'user_id': event.user_id, 'received_message_id': event.message_id}
         save()
         await bot.send(event, MessageSegment('file', {'file': crash_source, 'name': 'interrupted.bin'}), at_sender=False)

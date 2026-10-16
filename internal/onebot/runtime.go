@@ -72,6 +72,7 @@ func (r *Runtime) Actions() []Action {
 		{"send_msg", "messages", "Send text, mentions and bounded image/file parts", false, []string{"message"}}, {"send_private_msg", "messages", "Send a private message", false, []string{"user_id", "message"}}, {"send_group_msg", "messages", "Send a group message", false, []string{"group_id", "message"}},
 		{"get_image", "media", "Download a received image and resolve a bounded media URL", true, []string{"file"}},
 		{"can_send_image", "media", "Image submission capability", true, nil}, {"can_send_record", "media", "Voice submission capability", true, nil}, {"wechat_get_capabilities", "system", "Declared compatibility limits", true, nil}, {"wechat_get_delivery", "messages", "Read durable delivery status", true, []string{"delivery_id"}},
+		{"wechat_get_delivery_by_request", "messages", "Read an account-scoped request outcome without submitting; confirmed outcomes include the original receipt", true, []string{"wechat_request_id"}},
 	} {
 		p := map[string]any{}
 		for _, name := range []string{"user_id", "group_id", "message_id", "self_id"} {
@@ -86,6 +87,8 @@ func (r *Runtime) Actions() []Action {
 		p["wechat_request_id"] = map[string]any{"type": "string", "maxLength": 128}
 		names := append([]string(nil), v.required...)
 		switch v.name {
+		case "wechat_get_delivery_by_request":
+			p["wechat_request_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "description": "Original caller key; same 1..128 UTF-8-byte bound as send actions"}
 		case "get_group_member_info":
 			names = []string{"group_id", "user_id", "no_cache"}
 		case "send_msg":
@@ -370,6 +373,8 @@ func (r *Runtime) invoke(ctx context.Context, q Request, sink func(any) error) R
 			return channelFailure(e, 100, "delivery_unavailable")
 		}
 		return good(d)
+	case "wechat_get_delivery_by_request":
+		return r.deliveryByRequest(q, snap)
 	case "get_image":
 		file, e := paramString(q.Params, "file")
 		if e != nil {
@@ -500,25 +505,11 @@ func (r *Runtime) send(ctx context.Context, q Request, snap bot.Snapshot) Respon
 	for {
 		switch d.State {
 		case "accepted", "echo_observed":
-			parts := d.Parts
-			if len(parts) == 0 {
-				parts = []bot.Delivery{d}
+			receipt, err := r.confirmedReceipt(snap.Account, req.Key, d)
+			if err != nil {
+				return fail(1500, "state_unavailable")
 			}
-			messageIDs := []int64{}
-			deliveryIDs := []string{}
-			for _, part := range parts {
-				messageKey := part.MessageID
-				if messageKey == "" {
-					messageKey = "delivery/" + part.ID
-				}
-				mid, e := r.State.ID(snap.Account, "message", messageKey)
-				if e != nil {
-					return fail(1500, "state_unavailable")
-				}
-				messageIDs = append(messageIDs, mid)
-				deliveryIDs = append(deliveryIDs, part.ID)
-			}
-			return good(map[string]any{"message_id": messageIDs[0], "wechat_message_ids": messageIDs, "wechat_delivery_id": d.ID, "wechat_delivery_ids": deliveryIDs, "wechat_request_id": req.Key})
+			return good(receipt)
 		case "failed", "unknown", "cancelled":
 			v := fail(100, "delivery_"+d.State)
 			v.Data = map[string]any{"wechat_delivery_id": d.ID, "wechat_request_id": req.Key, "wechat_parts": d.Parts}

@@ -113,5 +113,6 @@ type Channel interface {
 	Message(account, id string) (Event, error)
 	Submit(context.Context, Send) (Delivery, error)
 	Delivery(account, id string) (Delivery, error)
+	DeliveryByRequest(account, key string) (Delivery, error)
 	Download(context.Context, string, string, string) (Content, error)
 }

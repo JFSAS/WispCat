@@ -11,6 +11,7 @@ from media_probe import local_media_url,payload,label_from_sender
 from stream_probe import probe
 from application_report import read_report,write_report
 from crash_reply import source_for
+from receipt_reply import enabled as receipt_enabled,request_for as receipt_request
 
 
 class Main(star.Star):
@@ -28,8 +29,9 @@ class Main(star.Star):
         message=event.message_obj
         text='/'+event.message_str.strip().lstrip('/')
         crash_source=source_for(text)
+        receipt=receipt_enabled(text)
         parts=[part for part in message.message if isinstance(part,(Image,File))]
-        if not parts and not crash_source and text not in ('/private-ping','/group-ping'):return
+        if not parts and not crash_source and not receipt and text not in ('/private-ping','/group-ping'):return
         adapter=next(item for item in self.context.platform_manager.get_insts() if item.meta().name=='aiocqhttp')
         group=bool(event.get_group_id())
         login=await adapter.bot.get_login_info(self_id=message.self_id)
@@ -40,6 +42,19 @@ class Main(star.Star):
             assert str(member['user_id'])==event.get_sender_id() and member['wechat_roster_complete'] is False
             assert event.is_at_or_wake_command
         streamed=await probe(lambda action,**params:getattr(adapter.bot,action)(**params),message.self_id,message.message_id)
+        if receipt:
+            params,record=receipt_request(text,message.self_id,event.get_sender_id(),message.sender.nickname)
+            value=read_report();value['receipt_attempt']={'command':text,'record':record,'received_message_id':int(message.message_id)};value['receipt_pending']=True;write_report(value)
+            try:
+                if text=='/receipt-retry':
+                    lookup=await adapter.bot.wechat_get_delivery_by_request(self_id=params['self_id'],wechat_request_id=params['wechat_request_id'])
+                    value=read_report();value['receipt_lookup']=lookup;write_report(value)
+                result=await adapter.bot.send_private_msg(**params)
+            except Exception as error:
+                value=read_report();value['receipt_pending']=False;value['receipt_error']=type(error).__name__;write_report(value)
+                raise
+            value=read_report();value['receipt_pending']=False;value.setdefault('receipt_results',[]).append({'command':text,'record':record,'result':result});write_report(value)
+            return
         if crash_source:
             value=read_report();value['crash_attempt']={'self_id':int(message.self_id),'user_id':int(event.get_sender_id()),'received_message_id':int(message.message_id)};write_report(value)
             yield event.chain_result([File(name='interrupted.bin',url=crash_source)])
