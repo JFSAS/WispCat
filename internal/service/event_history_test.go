@@ -655,15 +655,20 @@ func TestHistoryHTTPConsumerResumesBeyondNativeRetainedWindow(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 	go func() { done <- second.RunPost(ctx, config) }()
-	deadline := time.After(8 * time.Second)
+	// This checks ordered recovery, not a throughput target for 201 durable
+	// cursor commits. Bound each period without progress instead of requiring
+	// the entire replay to finish within one fixed wall-clock window.
+	deadline := time.NewTimer(8 * time.Second)
+	defer deadline.Stop()
 	for sequence := uint64(1); sequence <= 201; sequence++ {
+		deadline.Reset(8 * time.Second)
 		select {
 		case got := <-delivered:
 			if got != sequence {
 				t.Fatal("consumer missed/reordered history", got, sequence)
 			}
-		case <-deadline:
-			t.Fatal("consumer could not resume beyond native cache", sequence)
+		case <-deadline.C:
+			t.Fatal("consumer made no history progress for 8 seconds", sequence)
 		}
 	}
 	stop()

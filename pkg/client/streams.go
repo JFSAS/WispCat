@@ -67,8 +67,11 @@ func (c *Client) Stream(ctx context.Context, action string, params any, onFrame 
 			return result, errors.New("invalid_onebot_stream")
 		}
 	}
-	if scanner.Err() != nil || !terminal || limited.N <= 0 {
-		return result, errors.New("incomplete_onebot_stream")
+	if err := scanner.Err(); err != nil {
+		return result, exchangeError(ctx, ErrIncompleteStream, err)
+	}
+	if !terminal || limited.N <= 0 {
+		return result, ErrIncompleteStream
 	}
 	if err = onFrame(result); err != nil {
 		return result, err

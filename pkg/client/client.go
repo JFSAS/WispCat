@@ -49,8 +49,11 @@ func (c *Client) Call(ctx context.Context, action string, params any) (Response,
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (24<<20)+1))
-	if err != nil || len(raw) > 24<<20 || json.Unmarshal(raw, &result) != nil {
-		return result, errors.New("invalid_onebot_response")
+	if err != nil {
+		return result, exchangeError(ctx, ErrInvalidResponse, err)
+	}
+	if len(raw) > 24<<20 || json.Unmarshal(raw, &result) != nil {
+		return result, ErrInvalidResponse
 	}
 	if result.Status != "ok" || result.Retcode != 0 {
 		return result, &ActionError{Response: result}
@@ -78,11 +81,11 @@ func (c *Client) doAction(ctx context.Context, action string, params any) (*http
 	q.Header.Set("Content-Type", "application/json")
 	response, err := c.http.Do(q)
 	if err != nil {
-		return nil, errors.New("onebot_transport_failed")
+		return nil, exchangeError(ctx, ErrTransport, err)
 	}
 	if response.StatusCode != 200 {
 		_ = response.Body.Close()
-		return nil, errors.New("onebot_http_failed")
+		return nil, ErrHTTPStatus
 	}
 	return response, nil
 }
