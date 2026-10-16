@@ -2,6 +2,7 @@ package securedb
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -232,5 +233,51 @@ func TestEncryptedPrefixScanBoundariesAndLimit(t *testing.T) {
 		return tx.Scan("range", []byte("prefix-"), []byte("prefix-"), 1, func([]byte, []byte) (bool, error) { return true, nil })
 	}); err == nil {
 		t.Fatal("scan limit did not bound traversal")
+	}
+}
+
+func TestEncryptedWholeBucketMigrationPagesPreserveEveryRow(t *testing.T) {
+	db, err := Open(t.TempDir(), "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = db.Update(func(tx *Tx) error {
+		for i := 0; i < 301; i++ {
+			key := make([]byte, 2)
+			binary.BigEndian.PutUint16(key, uint16(i))
+			if err := tx.Put("migration", key, key); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var after []byte
+	seen := map[uint16]bool{}
+	for {
+		count := 0
+		err = db.View(func(tx *Tx) error {
+			return tx.ScanAll("migration", after, 64, func(key, value []byte) (bool, error) {
+				id := binary.BigEndian.Uint16(key)
+				if seen[id] || !bytes.Equal(key, value) {
+					t.Fatal("page replayed or corrupted a row", id)
+				}
+				seen[id] = true
+				after = append(bytes.Clone(key), 0)
+				count++
+				return count < 64, nil
+			})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count == 0 {
+			break
+		}
+	}
+	if len(seen) != 301 {
+		t.Fatal("migration skipped a binary key range", len(seen))
 	}
 }

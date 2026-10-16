@@ -107,10 +107,7 @@ func (a BotAdapter) wrapArchiveMediaDownloader() {
 				return nil, e
 			}
 			other := cached - stats.ResidentBytes
-			target := int64(MaxMediaCacheBytes) - other - int64(len(result.Data))
-			if target < 0 {
-				return nil, ErrMediaQueueFull
-			}
+			target := max(int64(0), int64(MaxMediaCacheBytes)-other-int64(len(result.Data)))
 			if stats.ResidentBytes > target || stats.ResidentFiles >= incomingMediaFiles {
 				if _, _, e = s.history.reclaimMediaLocked(ctx, s, target, incomingMediaFiles-1); e != nil {
 					return nil, e
@@ -124,6 +121,12 @@ func (a BotAdapter) wrapArchiveMediaDownloader() {
 			if e != nil {
 				return nil, e
 			}
+			if cached+int64(len(result.Data)) > MaxMediaCacheBytes {
+				cached, e = a.ensurePayloadBudgetLocked(ctx, int64(len(result.Data)))
+				if e != nil {
+					return nil, e
+				}
+			}
 			if cached+int64(len(result.Data)) > MaxMediaCacheBytes || stats.ResidentFiles >= incomingMediaFiles {
 				return nil, ErrMediaQueueFull
 			}
@@ -131,6 +134,12 @@ func (a BotAdapter) wrapArchiveMediaDownloader() {
 				return nil, e
 			}
 			return result, nil
+		}
+		if cached+int64(len(result.Data)) > MaxMediaCacheBytes {
+			cached, err = a.ensurePayloadBudgetLocked(ctx, int64(len(result.Data)))
+			if err != nil {
+				return nil, err
+			}
 		}
 		if cached+int64(len(result.Data)) > MaxMediaCacheBytes {
 			return nil, ErrMediaQueueFull

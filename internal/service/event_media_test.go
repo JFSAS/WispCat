@@ -556,7 +556,11 @@ func TestIncomingMediaSharedByteQuotaReclaimsOnlyIncoming(t *testing.T) {
 		t.Fatal("shared byte pressure did not reclaim incoming", row.Phase)
 	}
 	request := bot.Send{Account: s.data.Binding, Epoch: a.Snapshot().Epoch, Conversation: session, Key: "over-budget", Upload: &bot.Upload{Kind: "file", Name: "one.bin", Data: []byte{1}}}
-	if _, err := a.Submit(context.Background(), request); !errors.Is(err, ErrMediaQueueFull) || len(s.data.Jobs) != 0 {
+	if _, err := a.Submit(context.Background(), request); err != nil || len(s.data.Jobs) != 1 {
+		t.Fatal("new upload could not reclaim a recoverable incoming copy", err)
+	}
+	request.Key, request.Upload.Data = "protected-over-budget", body
+	if _, err := a.Submit(context.Background(), request); !errors.Is(err, ErrMediaQueueFull) || len(s.data.Jobs) != 1 {
 		t.Fatal("pinned byte budget ignored", err)
 	}
 }

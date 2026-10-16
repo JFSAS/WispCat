@@ -74,11 +74,13 @@ def main():
                     assert streams['file_count'] == 0 and streams['quota_bytes'] == 128 << 20 and streams['max_file_bytes'] == 16 << 20, streams
                     incoming_media = get(base + '/accounts/' + row['name'] + '/media-cache', env['FIXTURE_ADMIN_TOKEN'])
                     assert incoming_media['format'] == 'encrypted_incoming_media_v1' and incoming_media['tasks'] == 0 and incoming_media['accounted_file_limit'] == 512, incoming_media
+                    outgoing_media = get(base + '/accounts/' + row['name'] + '/outgoing-media', env['FIXTURE_ADMIN_TOKEN'])
+                    assert outgoing_media['format'] == 'encrypted_outgoing_media_v1' and outgoing_media['accounted_payload_bytes'] == 0 and outgoing_media['minimum_retention_seconds'] == 86400, outgoing_media
                     response = get('http://' + row['onebot_address'] + '/get_status', env['FIXTURE_BOT_TOKEN'])
                     assert response['retcode'] == 0 and response['data']['online'] is False, response
                     summaries.append({'name': row['name'], 'mode': status['mode'],
                         **{key: status[key] for key in ['auth_calls', 'sync_calls', 'send_calls']},
-                        'disk_read': status['connection']['disk_read'], 'onebot_status': response['data'], 'history': history, 'streams': streams, 'incoming_media': incoming_media})
+                        'disk_read': status['connection']['disk_read'], 'onebot_status': response['data'], 'history': history, 'streams': streams, 'incoming_media': incoming_media, 'outgoing_media': outgoing_media})
                 process.send_signal(signal.SIGTERM)
                 assert process.wait(timeout=10) == 0, log.read_text()
                 result = {'result': 'pass', 'system': platform.system(), 'machine': platform.machine(),

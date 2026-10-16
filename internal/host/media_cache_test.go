@@ -63,3 +63,59 @@ func TestIncomingMediaManagementIsAuthenticatedOfflineAndOwned(t *testing.T) {
 		}
 	}
 }
+
+func TestOutgoingMediaManagementIsAuthenticatedOfflineAndOwned(t *testing.T) {
+	h, err := New(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close(context.Background())
+	if err = h.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		method, path, body, token string
+		code                      int
+	}{
+		{"GET", "/accounts/first/outgoing-media", "", "", 401},
+		{"POST", "/accounts/first/outgoing-media/compact", "{}", "", 401},
+		{"GET", "/accounts/first/outgoing-media", "", "synthetic-admin-token", 200},
+		{"GET", "/accounts/second/outgoing-media", "", "synthetic-admin-token", 200},
+		{"POST", "/accounts/first/outgoing-media/compact", `{"before":0}`, "synthetic-admin-token", 400},
+		{"POST", "/accounts/first/outgoing-media/compact", "{}", "synthetic-admin-token", 409},
+	} {
+		q := httptest.NewRequest(tc.method, "http://"+h.Address()+tc.path, strings.NewReader(tc.body))
+		if tc.token != "" {
+			q.Header.Set("Authorization", "Bearer "+tc.token)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, q)
+		if w.Code != tc.code {
+			t.Fatal(tc.path, w.Code, w.Body.String())
+		}
+		if tc.code == 200 {
+			var value map[string]any
+			if json.Unmarshal(w.Body.Bytes(), &value) != nil || value["format"] != "encrypted_outgoing_media_v1" || value["minimum_retention_seconds"] != float64(86400) || value["released_files"] != float64(0) {
+				t.Fatal(w.Body.String())
+			}
+		}
+	}
+	for _, account := range h.accounts {
+		encoded, _ := json.Marshal(account.channel.Status())
+		var status map[string]any
+		_ = json.Unmarshal(encoded, &status)
+		for _, name := range []string{"auth_calls", "sync_calls", "send_calls"} {
+			if status[name] != float64(0) {
+				t.Fatal("outgoing media management triggered protocol activity", name)
+			}
+		}
+	}
+	if err = h.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range h.accounts {
+		if _, err = account.bot.OutgoingMediaStatus(); err == nil {
+			t.Fatal("outgoing media owner remained available after shutdown")
+		}
+	}
+}

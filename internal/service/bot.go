@@ -3,10 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -455,19 +452,9 @@ func (a BotAdapter) Download(ctx context.Context, account, conversation, file st
 			return bot.Content{}, bot.ErrNotFound
 		}
 		metadata := *job.Media
+		content, err := a.outgoingContentLocked(account, id, metadata)
 		s.mu.RUnlock()
-		content, err := (store.MediaCache{Directory: filepath.Join(s.directory, "media"), Binding: account}).Load(id)
-		if err != nil {
-			return bot.Content{}, err
-		}
-		digest := sha256.Sum256(content)
-		if int64(len(content)) != metadata.Size || hex.EncodeToString(digest[:]) != metadata.Digest {
-			return bot.Content{}, errors.New("media_integrity_failed")
-		}
-		if a.Snapshot().Account != account {
-			return bot.Content{}, bot.ErrScope
-		}
-		return bot.Content{Data: content, MIME: metadata.MIME, Name: metadata.Name}, nil
+		return content, err
 	}
 	if a.Service.history != nil {
 		return a.downloadIncomingMedia(ctx, account, conversation, parts[0], parts[1])

@@ -30,8 +30,10 @@ streams = [json.loads(event['Output'].split('STREAM_STORAGE_LOAD_REPORT=', 1)[1]
            for event in events if 'STREAM_STORAGE_LOAD_REPORT=' in event.get('Output', '')]
 incoming_media = [json.loads(event['Output'].split('INCOMING_MEDIA_LOAD_REPORT=', 1)[1])
                   for event in events if 'INCOMING_MEDIA_LOAD_REPORT=' in event.get('Output', '')]
+outgoing_media = [json.loads(event['Output'].split('OUTGOING_MEDIA_LOAD_REPORT=', 1)[1])
+                  for event in events if 'OUTGOING_MEDIA_LOAD_REPORT=' in event.get('Output', '')]
 result = {'result': 'pass', 'top_level_passed': len(passed), 'top_level_skipped': len(skipped),
-          'skipped': skipped, 'passed_packages': packages, 'index_load': loads, 'archive_load': archives, 'history_load': histories, 'working_set_load': working_sets, 'stream_load': streams, 'incoming_media_load': incoming_media,
+          'skipped': skipped, 'passed_packages': packages, 'index_load': loads, 'archive_load': archives, 'history_load': histories, 'working_set_load': working_sets, 'stream_load': streams, 'incoming_media_load': incoming_media, 'outgoing_media_load': outgoing_media,
           'test_json_sha256': hashlib.sha256(raw).hexdigest()}
 if args.report:
     args.report.write_text(json.dumps(result, indent=2) + '\n')
@@ -49,4 +51,6 @@ for load in working_sets:
 for load in streams:
     print(json.dumps(load))
 for load in incoming_media:
+    print(json.dumps(load))
+for load in outgoing_media:
     print(json.dumps(load))

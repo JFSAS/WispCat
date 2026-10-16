@@ -44,7 +44,7 @@ func (a BotAdapter) ArchiveStatus() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"archive": stats, "active_jobs": jobs, "active_batches": batches, "automatic_high_water": archiveHighWater, "automatic_keep_active": archiveKeepActive, "media_retention": "retained; archived bytes count toward quota"}, nil
+	return map[string]any{"archive": stats, "active_jobs": jobs, "active_batches": batches, "automatic_high_water": archiveHighWater, "automatic_keep_active": archiveKeepActive, "media_retention": "confirmed archived payload copies eligible after 24h; immutable metadata and unknown outcomes retained"}, nil
 }
 
 // ArchiveCompleted performs one bounded pass. Only complete terminal OneBot

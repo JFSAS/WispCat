@@ -234,6 +234,19 @@ func (tx *Tx) Scan(bucket string, prefix, start []byte, limit int, visit func([]
 	if len(prefix) == 0 || len(start) < len(prefix) || !bytes.HasPrefix(start, prefix) || limit < 1 || limit > 10000 {
 		return errors.New("index_scan_invalid")
 	}
+	return tx.scan(bucket, prefix, start, limit, visit)
+}
+
+// ScanAll visits a bounded page of a whole bucket for incremental migrations.
+// Callers stop explicitly at their page boundary and persist an exclusive cursor.
+func (tx *Tx) ScanAll(bucket string, start []byte, limit int, visit func([]byte, []byte) (bool, error)) error {
+	if limit < 1 || limit > 10000 {
+		return errors.New("index_scan_invalid")
+	}
+	return tx.scan(bucket, nil, start, limit, visit)
+}
+
+func (tx *Tx) scan(bucket string, prefix, start []byte, limit int, visit func([]byte, []byte) (bool, error)) error {
 	b := tx.tx.Bucket([]byte(bucket))
 	if b == nil {
 		return nil

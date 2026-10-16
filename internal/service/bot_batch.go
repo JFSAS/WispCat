@@ -195,20 +195,9 @@ func (a BotAdapter) Submit(ctx context.Context, r bot.Send) (bot.Delivery, error
 		return bot.Delivery{}, errors.New("send_journal_full")
 	}
 	if total > 0 {
-		cached, err := a.accountedMediaLocked()
+		cached, err := a.ensurePayloadBudgetLocked(ctx, total)
 		if err != nil {
 			return bot.Delivery{}, err
-		}
-		if cached+total > MaxMediaCacheBytes && a.Archive != nil {
-			// Finish any already-committed pruning before conservatively charging
-			// the same retained media in both the active checkpoint and archive.
-			if _, err = a.compactLocked(ctx, archiveKeepActive); err != nil {
-				return bot.Delivery{}, err
-			}
-			cached, err = a.accountedMediaLocked()
-			if err != nil {
-				return bot.Delivery{}, err
-			}
 		}
 		if cached+total > MaxMediaCacheBytes {
 			return bot.Delivery{}, ErrMediaQueueFull

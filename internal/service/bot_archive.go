@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/JFSAS/wechat-runtime/internal/media"
 	"github.com/JFSAS/wechat-runtime/internal/protocol"
@@ -53,20 +54,28 @@ type ArchiveStats struct {
 	LastArchivedAt     int64  `json:"last_archived_at"`
 	FileBytes          int64  `json:"file_bytes"`
 	NativeReservations uint64 `json:"native_reservations"`
+	ReleasedMediaBytes int64  `json:"released_media_bytes"`
+	ReleasedMediaFiles uint64 `json:"released_media_files"`
+	MediaRevision      uint64 `json:"media_revision"`
+	MediaPending       uint64 `json:"media_pending_deletions"`
+	MediaIndexReady    bool   `json:"media_index_ready"`
 }
 
 // DeliveryArchive keeps immutable terminal outcomes independently of the active
 // checkpoint. Its owner closes it only after all channel/adapter users stop.
 type DeliveryArchive struct {
-	db            *securedb.DB
-	directory     string
-	identity      string
-	writeMu       sync.Mutex
-	closed        bool
-	guardWrite    func([]byte) error
-	pendingWrite  func([]byte) error
-	reservationMu sync.Mutex
-	reservations  map[string]archiveMediaReservation
+	db               *securedb.DB
+	directory        string
+	identity         string
+	writeMu          sync.Mutex
+	closed           bool
+	guardWrite       func([]byte) error
+	pendingWrite     func([]byte) error
+	reservationMu    sync.Mutex
+	reservations     map[string]archiveMediaReservation
+	mediaUnavailable atomic.Bool
+	mediaRemove      func(string) error
+	mediaSync        func() error
 }
 
 type archiveGuard struct {
@@ -75,6 +84,7 @@ type archiveGuard struct {
 	Batches            uint64 `json:"minimum_batches"`
 	Jobs               uint64 `json:"minimum_jobs"`
 	NativeReservations uint64 `json:"minimum_native_reservations"`
+	MediaRevision      uint64 `json:"minimum_media_revision"`
 }
 
 func OpenDeliveryArchive(directory string) (*DeliveryArchive, error) {
@@ -98,7 +108,10 @@ func OpenDeliveryArchive(directory string) (*DeliveryArchive, error) {
 				return nil, ErrDeliveryArchive
 			}
 		}
-		if json.Unmarshal(rawGuard, &value) != nil || value.Schema != 1 || !mediaID(value.ID, 64) || (value.Batches == 0 && value.NativeReservations == 0) || value.Jobs < value.Batches {
+		if json.Unmarshal(rawGuard, &value) != nil || (value.Schema != 1 && value.Schema != 2) || !mediaID(value.ID, 64) || (value.Schema == 1 && value.Batches == 0 && value.NativeReservations == 0) || value.Jobs < value.Batches {
+			return nil, ErrDeliveryArchive
+		}
+		if value.Schema == 2 && (fields["minimum_media_revision"] == nil || string(fields["minimum_media_revision"]) == "null") {
 			return nil, ErrDeliveryArchive
 		}
 		guard = &value
@@ -147,6 +160,9 @@ func OpenDeliveryArchive(directory string) (*DeliveryArchive, error) {
 		return putArchiveCounts(tx, []byte("total"), archiveCounts{Schema: 1})
 	})
 	if err == nil {
+		err = a.openMediaLifecycle(guard)
+	}
+	if err == nil {
 		err = a.resolvePendingLocked()
 	}
 	if err == nil {
@@ -170,10 +186,10 @@ func (a *DeliveryArchive) Close() error {
 
 func (a *DeliveryArchive) ensureGuard() error {
 	stats, err := a.Stats("")
-	if err != nil || (stats.ArchivedBatches == 0 && stats.NativeReservations == 0) {
+	if err != nil {
 		return err
 	}
-	guard := archiveGuard{Schema: 1, ID: a.identity, Batches: stats.ArchivedBatches, Jobs: stats.ArchivedJobs, NativeReservations: stats.NativeReservations}
+	guard := archiveGuard{Schema: 2, ID: a.identity, Batches: stats.ArchivedBatches, Jobs: stats.ArchivedJobs, NativeReservations: stats.NativeReservations, MediaRevision: stats.MediaRevision}
 	raw, err := json.Marshal(guard)
 	if err != nil {
 		return err
@@ -291,6 +307,9 @@ func (a *DeliveryArchive) indexed(account, bucket, key string) (*archivedBatch, 
 }
 func (a *DeliveryArchive) Stats(account string) (ArchiveStats, error) {
 	result := ArchiveStats{Format: "encrypted_delivery_archive_v1"}
+	if a.mediaUnavailable.Load() {
+		return result, ErrDeliveryArchive
+	}
 	err := a.db.View(func(tx *securedb.Tx) error {
 		key, optional := []byte("total"), false
 		if account != "" {
@@ -300,7 +319,24 @@ func (a *DeliveryArchive) Stats(account string) (ArchiveStats, error) {
 		result.ArchivedBatches, result.ArchivedJobs = counts.Batches, counts.Jobs
 		result.RetainedMediaBytes, result.LastArchivedAt = counts.MediaBytes, counts.LastAt
 		result.NativeReservations = counts.NativeReservations
-		return e
+		if e != nil {
+			return e
+		}
+		media, e := a.mediaMeta(tx)
+		if e != nil {
+			return e
+		}
+		released := outgoingMediaAccount{Schema: 1, ReleasedBytes: media.ReleasedBytes, ReleasedFiles: media.ReleasedFiles}
+		if account != "" {
+			released, e = a.mediaAccount(tx, account)
+		}
+		if e != nil || released.ReleasedBytes > counts.MediaBytes {
+			return ErrDeliveryArchive
+		}
+		result.RetainedMediaBytes -= released.ReleasedBytes
+		result.ReleasedMediaBytes, result.ReleasedMediaFiles = released.ReleasedBytes, released.ReleasedFiles
+		result.MediaRevision, result.MediaPending, result.MediaIndexReady = media.Revision, media.Pending, media.Migrated
+		return nil
 	})
 	if err != nil {
 		return result, ErrDeliveryArchive
@@ -352,6 +388,10 @@ func (a *DeliveryArchive) storeRowsLocked(rows []archivedBatch, owner []byte, re
 		}
 	}
 	err := a.db.Update(func(tx *securedb.Tx) error {
+		media, e := a.mediaMeta(tx)
+		if e != nil {
+			return e
+		}
 		total, e := readArchiveCounts(tx, []byte("total"), false)
 		if e != nil {
 			return e
@@ -418,6 +458,9 @@ func (a *DeliveryArchive) storeRowsLocked(rows []archivedBatch, owner []byte, re
 			if e = tx.Put("batches", a.db.Key("batch", row.Account, row.Key), raw); e != nil {
 				return e
 			}
+			if e = a.indexOutgoingMedia(tx, &media, row); e != nil {
+				return e
+			}
 			for _, counters := range []*archiveCounts{&counts, &total} {
 				counters.Batches++
 				counters.Jobs += uint64(len(row.IDs))
@@ -429,6 +472,9 @@ func (a *DeliveryArchive) storeRowsLocked(rows []archivedBatch, owner []byte, re
 			}
 		}
 		if e = putArchiveCounts(tx, []byte("total"), total); e != nil {
+			return e
+		}
+		if e = a.putMediaMeta(tx, media); e != nil {
 			return e
 		}
 		if !recovering {
