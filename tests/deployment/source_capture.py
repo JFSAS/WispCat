@@ -9,6 +9,8 @@ import sys
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0,str(ROOT/'tools'))
+from source_manifest import runtime_inputs
 SOURCE = ROOT / '.bin/framework-sources/AstrBot'
 REVISION = '9441402872f65fffc35685b0ead5bd3337033cb2'
 
@@ -21,15 +23,7 @@ def archive():
 
 
 def capture():
-    files = {}
-    for name in ['cmd', 'internal', 'pkg', 'examples', 'tests', 'tools', 'provenance']:
-        for path in sorted((ROOT/name).rglob('*')):
-            if not path.is_file() or '__pycache__' in path.parts or path.name.startswith('._'):
-                continue
-            files[str(path.relative_to(ROOT))] = hashlib.sha256(path.read_bytes()).hexdigest()
-    for name in ['go.mod', 'go.sum']:
-        files[name] = hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
-    return {'schema': 1, 'runtime_inputs': files, 'astrbot_revision': REVISION,
+    return {'schema': 1, 'runtime_inputs': runtime_inputs(ROOT), 'astrbot_revision': REVISION,
             'astrbot_archive_sha256': hashlib.sha256(archive()).hexdigest()}
 
 

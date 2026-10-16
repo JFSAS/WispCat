@@ -65,7 +65,7 @@ func (c *Client) doAction(ctx context.Context, action string, params any) (*http
 	if err != nil {
 		return nil, err
 	}
-	if params == nil {
+	if params == nil || bytes.Equal(bytes.TrimSpace(body), []byte("null")) {
 		body = []byte("{}")
 	}
 	u := *c.base

@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,8 +15,9 @@ import (
 )
 
 type Server struct {
-	Mode   string
-	Client *client.Client
+	Mode      string
+	Client    *client.Client
+	Transfers *Transfers
 }
 type request struct {
 	Version string          `json:"jsonrpc"`
@@ -37,15 +39,46 @@ func (s *Server) Run(ctx context.Context, input io.Reader, output io.Writer) err
 	if s.Mode != "docs" && s.Client == nil {
 		return errors.New("mcp_endpoint_required")
 	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 4096), 1<<20)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	lines := make(chan []byte)
+	readError := make(chan error, 1)
+	go func() {
+		defer func() { readError <- scanner.Err(); close(lines) }()
+		for scanner.Scan() {
+			line := bytes.Clone(scanner.Bytes())
+			select {
+			case lines <- line:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	encoder := json.NewEncoder(output)
-	for scanner.Scan() {
+	for {
+		var line []byte
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case value, ok := <-lines:
+			if !ok {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return <-readError
+			}
+			line = value
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		var q request
-		if json.Unmarshal(scanner.Bytes(), &q) != nil || q.Version != "2.0" {
+		if json.Unmarshal(line, &q) != nil || q.Version != "2.0" {
 			if err := encoder.Encode(response{Version: "2.0", ID: json.RawMessage("null"), Error: map[string]any{"code": -32700, "message": "invalid_json_rpc"}}); err != nil {
 				return err
 			}
@@ -65,7 +98,6 @@ func (s *Server) Run(ctx context.Context, input io.Reader, output io.Writer) err
 			return err
 		}
 	}
-	return scanner.Err()
 }
 func (s *Server) handle(ctx context.Context, q request) (any, error) {
 	switch q.Method {
@@ -87,7 +119,7 @@ func (s *Server) handle(ctx context.Context, q request) (any, error) {
 			tools = append(tools, tool("query_action", "Call a read-only OneBot action", map[string]any{"action": map[string]string{"type": "string"}, "params": map[string]string{"type": "object"}}, true))
 		}
 		if s.Mode == "write" {
-			tools = append(tools, tool("invoke_action", "Execute a OneBot action", map[string]any{"action": map[string]string{"type": "string"}, "params": map[string]string{"type": "object"}}, false))
+			tools = append(tools, tool("invoke_action", "Execute a OneBot action; local file transfers require configured MCP host directories", map[string]any{"action": map[string]string{"type": "string"}, "params": map[string]string{"type": "object"}, "execution": map[string]any{"type": "object", "properties": map[string]any{"input_file": map[string]string{"type": "string"}}, "required": []string{"input_file"}, "additionalProperties": false}}, false))
 		}
 		return map[string]any{"tools": tools}, nil
 	case "resources/list":
@@ -104,9 +136,10 @@ func (s *Server) handle(ctx context.Context, q request) (any, error) {
 		var p struct {
 			Name      string `json:"name"`
 			Arguments struct {
-				Name   string         `json:"name"`
-				Action string         `json:"action"`
-				Params map[string]any `json:"params"`
+				Name      string          `json:"name"`
+				Action    string          `json:"action"`
+				Params    map[string]any  `json:"params"`
+				Execution json.RawMessage `json:"execution"`
 			} `json:"arguments"`
 		}
 		if json.Unmarshal(q.Params, &p) != nil {
@@ -129,11 +162,41 @@ func (s *Server) handle(ctx context.Context, q request) (any, error) {
 			if !ok {
 				return content("action_unavailable", true), nil
 			}
-			if a.Streaming && a.Name != "upload_file_stream" {
-				return content("stream_transport_required: use the Go SDK Stream method or OneBot HTTP/WebSocket", true), nil
-			}
 			if p.Name == "query_action" && !a.ReadOnly {
 				return content("write_action_requires_invoke", true), nil
+			}
+			input := ""
+			if len(p.Arguments.Execution) != 0 {
+				var execution struct {
+					InputFile string `json:"input_file"`
+				}
+				decoder := json.NewDecoder(bytes.NewReader(p.Arguments.Execution))
+				decoder.DisallowUnknownFields()
+				if decoder.Decode(&execution) != nil || execution.InputFile == "" || a.Name != "upload_file_stream" || p.Name != "invoke_action" {
+					return content("invalid_file_execution", true), nil
+				}
+				input = execution.InputFile
+			}
+			fileDownload := a.Name == "download_file_stream" || a.Name == "download_file_image_stream"
+			if fileDownload || input != "" {
+				if s.Mode != "write" || p.Name != "invoke_action" {
+					return content("local_file_requires_invoke", true), nil
+				}
+				if s.Transfers == nil {
+					return content("mcp_file_transfers_not_configured", true), nil
+				}
+				result, err := s.Transfers.call(ctx, s.Client, a.Name, p.Arguments.Params, input)
+				if err != nil {
+					return content(transferFailure(err), true), nil
+				}
+				return content(result, false), nil
+			}
+			if a.Streaming && a.Name != "upload_file_stream" {
+				result, err := streamSummary(ctx, s.Client, a.Name, p.Arguments.Params)
+				if err != nil {
+					return content("mcp_stream_failed", true), nil
+				}
+				return content(result, false), nil
 			}
 			result, err := s.Client.Call(ctx, a.Name, p.Arguments.Params)
 			if err != nil {

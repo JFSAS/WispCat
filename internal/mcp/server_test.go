@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/JFSAS/wechat-runtime/pkg/client"
 )
@@ -64,6 +67,28 @@ func TestMCPDocsAndWriteGate(t *testing.T) {
 		if gate["isError"] != true {
 			t.Fatal("query_action executed a side-effect action")
 		}
+	}
+}
+
+func TestMCPCancellationReturnsWhileInputRemainsOpen(t *testing.T) {
+	input, writer := io.Pipe()
+	defer input.Close()
+	defer writer.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() { finished <- (&Server{Mode: "docs"}).Run(ctx, input, io.Discard) }()
+	if _, err := writer.Write([]byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case err := <-finished:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MCP waited for another stdin line after cancellation")
 	}
 }
 
