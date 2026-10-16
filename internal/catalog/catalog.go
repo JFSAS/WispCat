@@ -12,6 +12,7 @@ var JSON []byte
 
 type Action struct {
 	Name      string          `json:"name"`
+	Category  string          `json:"category"`
 	Summary   string          `json:"summary"`
 	ReadOnly  bool            `json:"read_only"`
 	Schema    json.RawMessage `json:"input_schema"`

@@ -59,7 +59,7 @@ func (s *Server) handle(ctx context.Context, q request) (any, error) {
 	case "ping":
 		return map[string]any{}, nil
 	case "tools/list":
-		tools := []any{tool("list_actions", "List available actions", map[string]any{}, true), tool("get_action", "Get one action and its parameter schema", map[string]any{"name": map[string]string{"type": "string"}}, true)}
+		tools := catalogTools()
 		if s.Mode != "docs" {
 			tools = append(tools, tool("query_action", "Call a read-only OneBot action", map[string]any{"action": map[string]string{"type": "string"}, "params": map[string]string{"type": "object"}}, true))
 		}
@@ -79,31 +79,28 @@ func (s *Server) handle(ctx context.Context, q request) (any, error) {
 		return map[string]any{"contents": []any{map[string]string{"uri": p.URI, "mimeType": "application/json", "text": string(catalog.JSON)}}}, nil
 	case "tools/call":
 		var p struct {
-			Name      string `json:"name"`
-			Arguments struct {
-				Name      string          `json:"name"`
-				Action    string          `json:"action"`
-				Params    map[string]any  `json:"params"`
-				Execution json.RawMessage `json:"execution"`
-			} `json:"arguments"`
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
 		}
 		if json.Unmarshal(q.Params, &p) != nil {
 			return nil, errors.New("invalid_tool_call")
 		}
 		switch p.Name {
-		case "list_actions":
-			return content(catalog.Actions(), false), nil
-		case "get_action":
-			a, ok := catalog.Find(p.Arguments.Name)
-			if !ok {
-				return content("action_unavailable", true), nil
-			}
-			return content(a, false), nil
+		case "list_actions", "get_action", "search_actions", "list_categories":
+			return catalogCall(p.Name, p.Arguments), nil
 		case "query_action", "invoke_action":
+			var args struct {
+				Action    string          `json:"action"`
+				Params    map[string]any  `json:"params"`
+				Execution json.RawMessage `json:"execution"`
+			}
+			if len(p.Arguments) != 0 && json.Unmarshal(p.Arguments, &args) != nil {
+				return nil, errors.New("invalid_tool_call")
+			}
 			if s.Mode == "docs" || p.Name == "invoke_action" && s.Mode != "write" {
 				return content("execution_mode_denied", true), nil
 			}
-			a, ok := catalog.Find(p.Arguments.Action)
+			a, ok := catalog.Find(args.Action)
 			if !ok {
 				return content("action_unavailable", true), nil
 			}
@@ -111,11 +108,11 @@ func (s *Server) handle(ctx context.Context, q request) (any, error) {
 				return content("write_action_requires_invoke", true), nil
 			}
 			input := ""
-			if len(p.Arguments.Execution) != 0 {
+			if len(args.Execution) != 0 {
 				var execution struct {
 					InputFile string `json:"input_file"`
 				}
-				decoder := json.NewDecoder(bytes.NewReader(p.Arguments.Execution))
+				decoder := json.NewDecoder(bytes.NewReader(args.Execution))
 				decoder.DisallowUnknownFields()
 				if decoder.Decode(&execution) != nil || execution.InputFile == "" || a.Name != "upload_file_stream" || p.Name != "invoke_action" {
 					return content("invalid_file_execution", true), nil
@@ -130,20 +127,20 @@ func (s *Server) handle(ctx context.Context, q request) (any, error) {
 				if s.Transfers == nil {
 					return content("mcp_file_transfers_not_configured", true), nil
 				}
-				result, err := s.Transfers.call(ctx, s.Client, a.Name, p.Arguments.Params, input)
+				result, err := s.Transfers.call(ctx, s.Client, a.Name, args.Params, input)
 				if err != nil {
 					return content(transferFailure(err), true), nil
 				}
 				return content(result, false), nil
 			}
 			if a.Streaming && a.Name != "upload_file_stream" {
-				result, err := streamSummary(ctx, s.Client, a.Name, p.Arguments.Params)
+				result, err := streamSummary(ctx, s.Client, a.Name, args.Params)
 				if err != nil {
 					return content("mcp_stream_failed", true), nil
 				}
 				return content(result, false), nil
 			}
-			result, err := s.Client.Call(ctx, a.Name, p.Arguments.Params)
+			result, err := s.Client.Call(ctx, a.Name, args.Params)
 			if err != nil {
 				var action *client.ActionError
 				if errors.As(err, &action) {
@@ -163,10 +160,16 @@ func tool(name, description string, properties map[string]any, read bool) any {
 	required := []string{}
 	if name == "get_action" {
 		required = []string{"name"}
+	} else if name == "search_actions" {
+		required = []string{"query"}
 	} else if name == "query_action" || name == "invoke_action" {
 		required = []string{"action"}
 	}
-	return map[string]any{"name": name, "description": description, "inputSchema": map[string]any{"type": "object", "properties": properties, "required": required}, "annotations": map[string]bool{"readOnlyHint": read, "destructiveHint": !read, "openWorldHint": name == "query_action" || name == "invoke_action"}}
+	schema := map[string]any{"type": "object", "properties": properties, "required": required}
+	if name != "query_action" && name != "invoke_action" {
+		schema["additionalProperties"] = false
+	}
+	return map[string]any{"name": name, "description": description, "inputSchema": schema, "annotations": map[string]bool{"readOnlyHint": read, "destructiveHint": !read, "openWorldHint": name == "query_action" || name == "invoke_action"}}
 }
 func content(value any, failed bool) any {
 	raw, _ := json.Marshal(value)

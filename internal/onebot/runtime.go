@@ -28,6 +28,7 @@ type Response struct {
 }
 type Action struct {
 	Name      string         `json:"name"`
+	Category  string         `json:"category"`
 	Summary   string         `json:"summary"`
 	ReadOnly  bool           `json:"read_only"`
 	Schema    map[string]any `json:"input_schema"`
@@ -60,17 +61,17 @@ func channelFailure(err error, code int, category string) Response {
 func (r *Runtime) Actions() []Action {
 	items := []Action{}
 	for _, v := range []struct {
-		name, summary string
-		read          bool
-		required      []string
+		name, category, summary string
+		read                    bool
+		required                []string
 	}{
-		{"get_version_info", "Runtime and protocol versions", true, nil}, {"get_status", "Channel connection status", true, nil}, {"get_login_info", "Current mapped account identity", true, nil},
-		{"get_friend_list", "Known private contacts (cached)", true, nil}, {"get_group_list", "Known groups (cached)", true, nil}, {"get_group_info", "Cached group information", true, []string{"group_id"}},
-		{"get_group_member_info", "Observed group member information; authority/roster completeness unknown", true, []string{"group_id", "user_id"}},
-		{"get_stranger_info", "Known user information", true, []string{"user_id"}}, {"get_msg", "Read an observed message or delivery", true, []string{"message_id"}},
-		{"send_msg", "Send text, mentions and bounded image/file parts", false, []string{"message"}}, {"send_private_msg", "Send a private message", false, []string{"user_id", "message"}}, {"send_group_msg", "Send a group message", false, []string{"group_id", "message"}},
-		{"get_image", "Download a received image and resolve a bounded media URL", true, []string{"file"}},
-		{"can_send_image", "Image submission capability", true, nil}, {"can_send_record", "Voice submission capability", true, nil}, {"wechat_get_capabilities", "Declared compatibility limits", true, nil}, {"wechat_get_delivery", "Read durable delivery status", true, []string{"delivery_id"}},
+		{"get_version_info", "system", "Runtime and protocol versions", true, nil}, {"get_status", "system", "Channel connection status", true, nil}, {"get_login_info", "account", "Current mapped account identity", true, nil},
+		{"get_friend_list", "contacts", "Known private contacts (cached)", true, nil}, {"get_group_list", "groups", "Known groups (cached)", true, nil}, {"get_group_info", "groups", "Cached group information", true, []string{"group_id"}},
+		{"get_group_member_info", "groups", "Observed group member information; authority/roster completeness unknown", true, []string{"group_id", "user_id"}},
+		{"get_stranger_info", "contacts", "Known user information", true, []string{"user_id"}}, {"get_msg", "messages", "Read an observed message or delivery", true, []string{"message_id"}},
+		{"send_msg", "messages", "Send text, mentions and bounded image/file parts", false, []string{"message"}}, {"send_private_msg", "messages", "Send a private message", false, []string{"user_id", "message"}}, {"send_group_msg", "messages", "Send a group message", false, []string{"group_id", "message"}},
+		{"get_image", "media", "Download a received image and resolve a bounded media URL", true, []string{"file"}},
+		{"can_send_image", "media", "Image submission capability", true, nil}, {"can_send_record", "media", "Voice submission capability", true, nil}, {"wechat_get_capabilities", "system", "Declared compatibility limits", true, nil}, {"wechat_get_delivery", "messages", "Read durable delivery status", true, []string{"delivery_id"}},
 	} {
 		p := map[string]any{}
 		for _, name := range []string{"user_id", "group_id", "message_id", "self_id"} {
@@ -102,7 +103,7 @@ func (r *Runtime) Actions() []Action {
 		if len(v.required) > 0 {
 			schema["required"] = v.required
 		}
-		items = append(items, Action{Name: v.name, Summary: v.summary, ReadOnly: v.read, Schema: schema})
+		items = append(items, Action{Name: v.name, Category: v.category, Summary: v.summary, ReadOnly: v.read, Schema: schema})
 	}
 	return append(items, streamActions()...)
 }

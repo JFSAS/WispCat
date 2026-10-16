@@ -63,7 +63,7 @@ async def run():
         uploads=temp/'uploads';uploads.mkdir(mode=0o700)
         downloads=temp/'downloads';read_dir=temp/'read-must-not-exist'
         base=dict(env,WECHAT_MCP_TOKEN=BOT,WECHAT_MCP_ENDPOINT=endpoints['synthetic-a'],WECHAT_MCP_UPLOAD_ROOT=str(uploads))
-        negotiated=[];files=[];checks=[]
+        negotiated=[];files=[];checks=[];discovery={}
 
         async def tool(session,name,action,params=None,execution=None,failed=False):
             args={'action':action,'params':params or {}}
@@ -85,13 +85,35 @@ async def run():
             assert len(sdk_processes)==before+1 and sdk_processes[-1].returncode==0
 
         async def docs(session):
-            tools=await session.list_tools();assert {tool.name for tool in tools.tools}=={'list_actions','get_action'}
+            tools=await session.list_tools();assert {tool.name for tool in tools.tools}=={'list_actions','get_action','search_actions','list_categories'}
             action=await session.call_tool('get_action',{'name':'upload_file_stream'})
             assert not action.isError and json.loads(action.content[0].text)['streaming']
             resources=await session.list_resources();assert str(resources.resources[0].uri)=='wechat://onebot/actions'
             data=await session.read_resource(AnyUrl('wechat://onebot/actions'))
-            assert len(json.loads(data.contents[0].text))==22
-            checks.append('initialize/ping/catalog/resource schema validation')
+            async def catalog_call(name,arguments):
+                value=await session.call_tool(name,arguments)
+                assert not value.isError and len(value.content)==1 and value.content[0].type=='text'
+                return json.loads(value.content[0].text)
+            all_actions=await catalog_call('list_actions',{})
+            assert isinstance(all_actions,list) and len(all_actions)==22
+            assert json.loads(data.contents[0].text)==all_actions
+            categories=await catalog_call('list_categories',{})
+            assert sum(item['count'] for item in categories)==len(all_actions)
+            assert [item['category'] for item in categories]==sorted(item['category'] for item in categories)
+            found=await catalog_call('search_actions',{'query':'  GROUP_MEMBER  ','category':'groups'})
+            assert found['count']==1 and found['actions'][0]['name']=='get_group_member_info'
+            assert found['actions'][0]['category']=='groups' and 'input_schema' not in found['actions'][0]
+            group=await catalog_call('get_action',{'name':found['actions'][0]['name']})
+            assert group['category']=='groups' and set(group['input_schema']['required'])=={'group_id','user_id'}
+            streams=await catalog_call('list_actions',{'category':'streams'})
+            assert streams and all(item['category']=='streams' for item in streams)
+            assert (await catalog_call('search_actions',{'query':'delete_msg'}))=={'count':0,'actions':[]}
+            for invalid_args in [{'query':'stream','unexpected':True},{'QUERY':'stream'},{'query':'absent','QUERY':'stream'}]:
+                invalid=await session.call_tool('search_actions',invalid_args);assert invalid.isError
+            for item in tools.tools:
+                assert item.annotations.readOnlyHint and not item.annotations.openWorldHint and item.inputSchema['additionalProperties'] is False
+            discovery.update(action_count=len(all_actions),categories=categories,tools=sorted(item.name for item in tools.tools),legacy_full_array=True,compact_search=True,resource_matches_full_records=True,invalid_arguments_rejected=True,unsupported_native_action_not_advertised=True)
+            checks.append('initialize/ping/four read-only catalog tools, categories, compact search, full schema/resource and invalid-argument validation')
         await session_check('docs',endpoints['synthetic-a'],temp/'docs-must-not-exist',docs)
         assert not (temp/'docs-must-not-exist').exists()
 
@@ -177,7 +199,7 @@ async def run():
         assert all(digest(private[name])==hashes[name] for name in private)
         result={'result':'pass','sdk':'Official modelcontextprotocol Python SDK','sdk_version':importlib.metadata.version('mcp'),
             'scope':'Actual ClientSession/stdio transport/schema validation against Go MCP and separate Host/OneBot synthetic account fixture',
-            'checks':checks,'negotiated_protocol_versions':negotiated,'sdk_processes':len(sdk_processes),'sdk_process_exit_codes':[process.returncode for process in sdk_processes],
+            'checks':checks,'catalog_discovery':discovery,'negotiated_protocol_versions':negotiated,'sdk_processes':len(sdk_processes),'sdk_process_exit_codes':[process.returncode for process in sdk_processes],
             'sdk_termination_escalations':len(escalations),'instrumentation':'Transparent observation of actual SDK subprocess create/termination; no transport/session/schema/response replacement',
             'request_dispatch':{'concurrent_ping_and_action_during_stalled_download':True,'cancellation_notification_closed_http_and_removed_partial':True,'cancelled_owner_reopened':True,'request_id_observation':'Read only next-ID counter of pinned SDK to address the public cancellation notification'},
             'files':[{'bytes':item['bytes'],'sha256':item['sha256'],'frames':item['frames']} for item in files],

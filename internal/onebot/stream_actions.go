@@ -373,10 +373,10 @@ func streamActions() []Action {
 	}
 	download := map[string]any{"self_id": self, "file": map[string]any{"type": "string"}, "file_id": map[string]any{"type": "string"}, "chunk_size": map[string]any{"type": "integer", "minimum": 16 << 10, "maximum": streamChunkLimit}}
 	return []Action{
-		{Name: "upload_file_stream", Summary: "Upload bounded encrypted chunks; returns a scoped stream:// reference", Schema: map[string]any{"type": "object", "required": []string{"stream_id"}, "properties": upload}, Streaming: true},
-		{Name: "clean_stream_temp_file", Summary: "Remove inactive temporary transfers; preserve active uploads and readers", Schema: map[string]any{"type": "object", "properties": map[string]any{"self_id": self}}},
-		{Name: "download_file_stream", Summary: "Stream a scoped upload, received media ID or bounded HTTP(S) source", ReadOnly: true, Schema: map[string]any{"type": "object", "properties": download}, Streaming: true},
-		{Name: "download_file_image_stream", Summary: "Stream image content through bounded response frames", ReadOnly: true, Schema: map[string]any{"type": "object", "properties": download}, Streaming: true},
-		{Name: "test_download_stream", Summary: "Exercise ten synthetic streaming frames without platform requests", ReadOnly: true, Schema: map[string]any{"type": "object", "properties": map[string]any{"self_id": self, "error": map[string]any{"type": "boolean"}}}, Streaming: true},
+		{Category: "streams", Name: "upload_file_stream", Summary: "Upload bounded encrypted chunks; returns a scoped stream:// reference", Schema: map[string]any{"type": "object", "required": []string{"stream_id"}, "properties": upload}, Streaming: true},
+		{Category: "streams", Name: "clean_stream_temp_file", Summary: "Remove inactive temporary transfers; preserve active uploads and readers", Schema: map[string]any{"type": "object", "properties": map[string]any{"self_id": self}}},
+		{Category: "streams", Name: "download_file_stream", Summary: "Stream a scoped upload, received media ID or bounded HTTP(S) source", ReadOnly: true, Schema: map[string]any{"type": "object", "properties": download}, Streaming: true},
+		{Category: "streams", Name: "download_file_image_stream", Summary: "Stream image content through bounded response frames", ReadOnly: true, Schema: map[string]any{"type": "object", "properties": download}, Streaming: true},
+		{Category: "streams", Name: "test_download_stream", Summary: "Exercise ten synthetic streaming frames without platform requests", ReadOnly: true, Schema: map[string]any{"type": "object", "properties": map[string]any{"self_id": self, "error": map[string]any{"type": "boolean"}}}, Streaming: true},
 	}
 }
