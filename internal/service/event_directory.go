@@ -275,7 +275,7 @@ func (h *EventHistory) observeContact(tx *securedb.Tx, s *Service, meta *directo
 		return err
 	}
 	merged := contact
-	if old != nil && old.Contact != nil {
+	if old != nil && old.Contact != nil && old.Available {
 		if merged.Nickname == nil {
 			merged.Nickname = old.Contact.Nickname
 		}
@@ -439,6 +439,9 @@ func (h *EventHistory) upgradeDirectory(tx *securedb.Tx, s *Service, meta histor
 func (h *EventHistory) directoryRead(account string, read func(*securedb.Tx) error) error {
 	h.writeMu.Lock()
 	defer h.writeMu.Unlock()
+	return h.directoryReadLocked(account, read)
+}
+func (h *EventHistory) directoryReadLocked(account string, read func(*securedb.Tx) error) error {
 	if h.closed || h.unavailable || h.stageErr != nil {
 		return ErrEventHistory
 	}
@@ -555,6 +558,9 @@ func (h *EventHistory) indexMessageID(tx *securedb.Tx, account, id string) error
 	return tx.Put("message-ids", key, raw)
 }
 func (h *EventHistory) restoreRuntimeLocked(s *Service) error {
+	if err := h.restoreCheckpointContacts(s.data); err != nil {
+		return err
+	}
 	if err := h.restoreMediaLocked(s); err != nil {
 		return err
 	}

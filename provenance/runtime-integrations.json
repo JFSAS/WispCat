@@ -1,6 +1,6 @@
 {
   "internal/service/service.go": {
-    "reason": "Attach runtime history, stage contacts/raw messages before eviction, restore persisted availability for queued work, and commit history plus directory before checkpoint compaction. Wire/session/client code remains intact.",
+    "reason": "Attach runtime history, stage contacts/raw messages before eviction, restore persisted availability for queued work, and commit history plus directory before checkpoint compaction. Wire/session/client code remains intact. Large contact checkpoints explicitly depend on the encrypted directory; serialization temporarily omits only the committed roster and restores the live data on every exit.",
     "insertions": [
       {
         "before_line": 58,
@@ -8,11 +8,11 @@
       },
       {
         "before_line": 166,
-        "text": "\t}\n\tif s.history != nil {\n\t\tif err := s.history.persistLocked(s); err != nil {\n\t\t\treturn err\n\t\t}\n"
+        "text": "\t}\n\tif s.history != nil {\n\t\tif err := s.history.persistLocked(s); err != nil {\n\t\t\treturn err\n\t\t}\n\t\trestoreContacts, err := s.history.prepareContactCheckpoint(s.data)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tdefer restoreContacts()\n"
       },
       {
         "before_line": 289,
-        "text": "\tif s.history != nil && data != nil {\n\t\tif err := s.history.restoreRuntimeLocked(s); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n"
+        "text": "\tif err := serializedContactCheckpoint(data); err != nil {\n\t\treturn err\n\t}\n\tif err := contactCheckpointDependency(data, s.history); err != nil {\n\t\treturn err\n\t}\n\tif s.history != nil && data != nil {\n\t\tif err := s.history.restoreRuntimeLocked(s); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n"
       },
       {
         "before_line": 548,

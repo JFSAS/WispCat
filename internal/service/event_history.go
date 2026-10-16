@@ -200,10 +200,16 @@ func OpenEventHistory(directory string) (*EventHistory, error) {
 		if err == nil && exists {
 			data, err = cp.Load()
 			if err == nil {
+				err = serializedContactCheckpoint(data)
+			}
+			if err == nil {
 				err = h.importCheckpoint(data)
 			}
 			if err == nil {
 				err = h.ensureGuard(data.Binding)
+			}
+			if err == nil {
+				err = h.restoreCheckpointContacts(data)
 			}
 		} else if err == nil {
 			err = db.View(func(tx *securedb.Tx) error {
@@ -287,6 +293,9 @@ func (a BotAdapter) EnableHistory(h *EventHistory) error {
 		err := h.importCheckpoint(s.data)
 		if err == nil {
 			err = h.ensureGuard(s.data.Binding)
+		}
+		if err == nil {
+			err = h.restoreCheckpointContactsLocked(s.data, true)
 		}
 		h.writeMu.Unlock()
 		if err != nil {
@@ -445,6 +454,9 @@ func (h *EventHistory) put(tx *securedb.Tx, row historyRecord) (bool, error) {
 	return true, nil
 }
 func (h *EventHistory) importCheckpoint(data *store.Data) error {
+	if err := contactCheckpointDependency(data, h); err != nil {
+		return err
+	}
 	if !data.ValidBinding() || len(data.APIKey) != 32 {
 		return ErrEventHistory
 	}
@@ -454,6 +466,9 @@ func (h *EventHistory) importCheckpoint(data *store.Data) error {
 		meta, exists, err := h.meta(tx, data.Binding, historyNamespace(data))
 		if err != nil {
 			return err
+		}
+		if _, external := data.Consumers[contactCheckpointKey]; external && (!exists || meta.Schema != 2) {
+			return ErrEventHistory
 		}
 		if exists {
 			updated, _, err := h.upgradeDirectory(tx, s, meta, true)
@@ -632,6 +647,16 @@ func (h *EventHistory) persistLocked(s *Service) error {
 	if err = h.ensureGuard(s.data.Binding); err != nil {
 		h.unavailable = true
 		return ErrEventHistory
+	}
+	// A QR retry can carry staged contact facts from an earlier failed first
+	// Sync. Reconcile the complete native roster after those facts commit, before
+	// computing a checkpoint dependency. Ordinary message/job writes skip this.
+	if len(h.pendingContacts) > 0 {
+		h.unavailable = false
+		if err = h.restoreCheckpointContactsLocked(s.data, false); err != nil {
+			h.unavailable = true
+			return err
+		}
 	}
 	if err = h.finishMediaDeletesLocked(s); err != nil {
 		h.unavailable = true

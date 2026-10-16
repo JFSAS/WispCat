@@ -39,10 +39,19 @@ func (s *Service) adoptHistoryLoginLocked(client *protocol.Client, result protoc
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return ErrEventHistory
 	}
+	if err := s.history.restoreContactAnchor(&data); err != nil {
+		return err
+	}
 	anchor := data
 	anchor.Session = cloneSession(data.Session)
 	anchor.Session.Cursor = bytes.Clone(client.SavedCursor)
-	if err := cp.Save(&anchor); err != nil {
+	restoreContacts, err := s.history.prepareContactCheckpoint(&anchor)
+	if err != nil {
+		return err
+	}
+	err = cp.Save(&anchor)
+	restoreContacts()
+	if err != nil {
 		return &protocol.Error{Category: "checkpoint_save_failed"}
 	}
 	s.data, s.client, s.checkpoint = &data, client, cp

@@ -169,6 +169,11 @@ func (s *Service) saveLocked() error {
 		if err := s.history.persistLocked(s); err != nil {
 			return err
 		}
+		restoreContacts, err := s.history.prepareContactCheckpoint(s.data)
+		if err != nil {
+			return err
+		}
+		defer restoreContacts()
 	}
 	err := s.checkpoint.Save(s.data)
 	if err == nil {
@@ -292,6 +297,12 @@ func (s *Service) prepare(online, fresh bool) error {
 	s.restored = exists
 	s.sessionState = "unverified"
 	s.connection.Stage = "ready"
+	if err := serializedContactCheckpoint(data); err != nil {
+		return err
+	}
+	if err := contactCheckpointDependency(data, s.history); err != nil {
+		return err
+	}
 	if s.history != nil && data != nil {
 		if err := s.history.restoreRuntimeLocked(s); err != nil {
 			return err
