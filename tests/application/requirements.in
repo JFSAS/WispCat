@@ -1,0 +1,7 @@
+# Pinned AstrBot application lifecycle, built-in pipeline and plugin imports.
+# Model providers and the dashboard listener remain disabled during execution.
+-r ../framework/astrbot-requirements.in
+python-ripgrep==0.0.8
+pycryptodome==4.0.0
+dashscope==1.27.7
+pyotp==2.10.0

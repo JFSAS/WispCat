@@ -1,0 +1,4 @@
+name: synthetic_application_probe
+desc: Offline runtime integration probe; no model or platform login
+author: Runtime integration fixture
+version: 0.0.1
