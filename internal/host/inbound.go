@@ -37,7 +37,7 @@ func newInboundEpoch(parent context.Context, secret string) *inboundEpoch {
 	return &inboundEpoch{secret: secret, ctx: ctx, cancel: cancel}
 }
 
-func newInboundBinding(adapter *onebot.Server, listener net.Listener, epoch *inboundEpoch) *inboundBinding {
+func newInboundBinding(target listenerTarget, listener net.Listener, epoch *inboundEpoch) *inboundBinding {
 	b := &inboundBinding{listener: listener, epoch: epoch, done: make(chan struct{})}
 	b.http = &http.Server{ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		IdleTimeout: 90 * time.Second, MaxHeaderBytes: 16384,
@@ -66,7 +66,7 @@ func newInboundBinding(adapter *onebot.Server, listener net.Listener, epoch *inb
 			}
 		})
 		defer stop()
-		adapter.ServeEndpoint(w, r.WithContext(ctx), listener.Addr().String(), epoch.secret)
+		target.serve(w, r.WithContext(ctx), listener.Addr().String(), epoch.secret)
 	})
 	return b
 }
@@ -93,21 +93,37 @@ type inboundStatus struct {
 // before the old binding is touched. At most one old epoch may be retiring;
 // another apply must join it before allocating another binding.
 type inboundServer struct {
-	mu        sync.Mutex
-	adapter   *onebot.Server
-	parent    context.Context
-	active    *inboundBinding
-	listen    string
-	retiring  <-chan struct{}
-	lastError string
-	closed    bool
-	done      chan struct{}
+	operations sync.Mutex
+	target     listenerTarget
+	prepared   *listenerChange
+	mu         sync.Mutex
+	parent     context.Context
+	active     *inboundBinding
+	listen     string
+	retiring   <-chan struct{}
+	lastError  string
+	closed     bool
+	done       chan struct{}
+}
+
+type listenerTarget struct {
+	serve   func(http.ResponseWriter, *http.Request, string, string)
+	publish func(string, string)
+}
+
+type listenerChange struct {
+	listen, secret, address string
+	listener                net.Listener
+	reuse, noop             bool
 }
 
 func newInboundServer(adapter *onebot.Server, parent context.Context, listener net.Listener, listen, secret string) *inboundServer {
-	s := &inboundServer{adapter: adapter, parent: parent, listen: listen}
-	s.active = newInboundBinding(adapter, listener, newInboundEpoch(parent, secret))
-	adapter.SetMediaEndpoint(listener.Addr().String(), secret)
+	return newListenerServer(listenerTarget{serve: adapter.ServeEndpoint, publish: adapter.SetMediaEndpoint}, parent, listener, listen, secret)
+}
+func newListenerServer(target listenerTarget, parent context.Context, listener net.Listener, listen, secret string) *inboundServer {
+	s := &inboundServer{target: target, parent: parent, listen: listen}
+	s.active = newInboundBinding(target, listener, newInboundEpoch(parent, secret))
+	target.publish(listener.Addr().String(), secret)
 	s.active.start()
 	return s
 }
@@ -147,62 +163,102 @@ func (s *inboundServer) snapshot(listen, secret string) (inboundStatus, bool) {
 	return status, match
 }
 
-func (s *inboundServer) apply(ctx context.Context, listen, secret string) error {
+func (s *inboundServer) prepare(ctx context.Context, listen, secret string) (*listenerChange, error) {
 	if !loopbackListen(listen) || len(secret) < 16 || len(secret) > 4096 || strings.ContainsAny(secret, "\r\n") {
-		return errors.New("invalid_listener_configuration")
+		return nil, errors.New("invalid_listener_configuration")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.parent.Err() != nil {
-		return errors.New("listener_closed")
+		return nil, errors.New("listener_closed")
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
+	}
+	if s.prepared != nil {
+		return nil, errors.New("listener_change_pending")
 	}
 	if err := waitInbound(ctx, s.retiring); err != nil {
-		return err
+		return nil, err
 	}
 	s.retiring = nil
 	old := s.active
-	reuse := s.listen == listen
+	change := &listenerChange{listen: listen, secret: secret, address: old.listener.Addr().String(), reuse: s.listen == listen}
 	select {
 	case <-old.done:
-		reuse = false
+		change.reuse = false
 	default:
 	}
-	if reuse && old.epoch.secret == secret {
+	change.noop = change.reuse && old.epoch.secret == secret
+	if !change.reuse {
+		var err error
+		change.listener, err = net.Listen("tcp", listen)
+		if err != nil {
+			s.lastError = "listener_bind_failed"
+			return nil, errors.New(s.lastError)
+		}
+		change.address = change.listener.Addr().String()
+		if err = ctx.Err(); err != nil {
+			_ = change.listener.Close()
+			return nil, err
+		}
+	}
+	s.prepared = change
+	return change, nil
+}
+func (s *inboundServer) discard(change *listenerChange) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.prepared != change {
+		return
+	}
+	s.prepared = nil
+	if change.listener != nil {
+		_ = change.listener.Close()
+	}
+}
+func (s *inboundServer) commit(ctx context.Context, change *listenerChange) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.prepared != change {
+		return errors.New("listener_change_cancelled")
+	}
+	if s.closed || s.parent.Err() != nil {
+		if change.listener != nil {
+			_ = change.listener.Close()
+		}
+		if s.prepared == change {
+			s.prepared = nil
+		}
+		return errors.New("listener_change_cancelled")
+	}
+	if err := ctx.Err(); err != nil {
+		s.prepared = nil
+		if change.listener != nil {
+			_ = change.listener.Close()
+		}
+		return err
+	}
+	s.prepared = nil
+	old := s.active
+	if change.noop {
+		// Metadata such as an environment reference may change while the
+		// resolved credentials stay identical. Publish without retiring peers.
+		s.target.publish(old.listener.Addr().String(), change.secret)
 		s.lastError = ""
 		return nil
 	}
-	var listener net.Listener
-	if !reuse {
-		var err error
-		listener, err = net.Listen("tcp", listen)
-		if err != nil {
-			s.lastError = "listener_bind_failed"
-			return errors.New("listener_bind_failed")
-		}
-		if err = ctx.Err(); err != nil {
-			_ = listener.Close()
-			return err
-		}
-	}
-	epoch := newInboundEpoch(s.parent, secret)
+	epoch := newInboundEpoch(s.parent, change.secret)
 	previous := old.epoch
-	if reuse {
+	if change.reuse {
 		old.mu.Lock()
-		// Publish links before admitting any request with the new credentials.
-		// The admission lock prevents a new epoch from returning an old-token
-		// media URL in the interval between these two configuration writes.
-		s.adapter.SetMediaEndpoint(old.listener.Addr().String(), secret)
+		s.target.publish(old.listener.Addr().String(), change.secret)
 		old.epoch = epoch
 		old.mu.Unlock()
 	} else {
-		s.active = newInboundBinding(s.adapter, listener, epoch)
-		s.listen = listen
-		s.adapter.SetMediaEndpoint(listener.Addr().String(), secret)
-	}
-	if !reuse {
+		s.active = newInboundBinding(s.target, change.listener, epoch)
+		s.listen = change.listen
+		s.target.publish(change.address, change.secret)
 		s.active.start()
 		old.stop()
 	}
@@ -211,7 +267,7 @@ func (s *inboundServer) apply(ctx context.Context, listen, secret string) error 
 	s.retiring = done
 	go func() {
 		previous.requests.Wait()
-		if !reuse {
+		if !change.reuse {
 			<-old.done
 		}
 		close(done)
@@ -224,11 +280,38 @@ func (s *inboundServer) apply(ctx context.Context, listen, secret string) error 
 	s.lastError = ""
 	return nil
 }
+func (s *inboundServer) apply(ctx context.Context, listen, secret string) error {
+	s.operations.Lock()
+	defer s.operations.Unlock()
+	change, err := s.prepare(ctx, listen, secret)
+	if err != nil {
+		return err
+	}
+	return s.commit(ctx, change)
+}
+func (s *inboundServer) finishRetirement() {
+	s.mu.Lock()
+	done := s.retiring
+	s.mu.Unlock()
+	_ = waitInbound(context.Background(), done)
+	s.mu.Lock()
+	if s.retiring == done {
+		s.retiring = nil
+		s.lastError = ""
+	}
+	s.mu.Unlock()
+}
 
 func (s *inboundServer) close(ctx context.Context) error {
 	s.mu.Lock()
 	if s.done == nil {
 		s.closed = true
+		if s.prepared != nil {
+			if s.prepared.listener != nil {
+				_ = s.prepared.listener.Close()
+			}
+			s.prepared = nil
+		}
 		s.done = make(chan struct{})
 		s.active.stop()
 		active, retiring, done := s.active, s.retiring, s.done

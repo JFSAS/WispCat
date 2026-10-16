@@ -52,6 +52,7 @@ type inboundSettings struct {
 	manager                     *inboundServer
 	base                        Account
 	top                         Config
+	configSource                func() Config
 }
 
 func newInboundSettings(directory string, top Config, account Account) *inboundSettings {
@@ -69,6 +70,9 @@ func (s *inboundSettings) save(revision string, plan inboundPlan) error {
 	account := s.base
 	account.Listen, account.TokenEnv = plan.Listen, plan.TokenEnv
 	c := s.top
+	if s.configSource != nil {
+		c = s.configSource()
+	}
 	c.Accounts = []Account{account}
 	if err := c.validate(false); err != nil {
 		return err

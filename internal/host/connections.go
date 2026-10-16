@@ -19,6 +19,10 @@ import (
 
 func effectiveConfig(c Config) (Config, error) {
 	var err error
+	c, err = effectiveManagement(c)
+	if err != nil {
+		return c, err
+	}
 	c, err = effectiveTopology(c)
 	if err != nil {
 		return c, err
@@ -79,6 +83,7 @@ type connectionSettings struct {
 	manager                     *onebot.NetworkManager
 	base                        Account
 	top                         Config
+	configSource                func() Config
 }
 
 func planRevision(plan connectionPlan) string {
@@ -109,7 +114,15 @@ func (s *connectionSettings) validate(plan connectionPlan) error {
 	a := s.base
 	a.Reverse, a.HTTPPost = plan.Reverse, plan.HTTPPost
 	c := s.top
+	if s.configSource != nil {
+		c = s.configSource()
+	}
 	c.Accounts = []Account{a}
+	var err error
+	c, err = effectiveInboundConfig(c)
+	if err != nil {
+		return err
+	}
 	return c.Validate()
 }
 func (s *connectionSettings) specs(plan connectionPlan) ([]onebot.NetworkSpec, error) {

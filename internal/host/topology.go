@@ -111,6 +111,8 @@ func (s *topologySettings) save(revision string, plan topologyPlan) error {
 	top, closed := h.config, h.closed
 	owners := append([]*accountRuntime(nil), h.accounts...)
 	h.mu.Unlock()
+	currentManagement := h.currentConfig()
+	top.Listen, top.TokenEnv = currentManagement.Listen, currentManagement.TokenEnv
 	if s.closed || closed {
 		return errors.New("runtime_stopping")
 	}
@@ -237,6 +239,8 @@ func (s *topologySettings) apply(ctx context.Context) (err error) {
 	stopped := h.closed || !h.started
 	owners := append([]*accountRuntime(nil), h.accounts...)
 	h.mu.Unlock()
+	currentManagement := h.currentConfig()
+	top.Listen, top.TokenEnv = currentManagement.Listen, currentManagement.TokenEnv
 	if s.closed || stopped || parent == nil || parent.Err() != nil {
 		return errors.New("runtime_not_running")
 	}
@@ -324,6 +328,8 @@ func (s *topologySettings) apply(ctx context.Context) (err error) {
 			}
 		}
 		candidates = append(candidates, owner)
+		owner.connections.configSource = h.currentConfig
+		owner.inbound.configSource = h.currentConfig
 		initial[owner], err = owner.connections.specs(owner.connections.saved)
 		if err != nil {
 			s.lastError = "topology_preflight_failed"
