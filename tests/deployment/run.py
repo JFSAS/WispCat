@@ -48,9 +48,10 @@ def wait_for(callback, processes, timeout=30):
 
 
 def run(framework,scenario='text'):
-    assert framework in ('nonebot', 'astrbot','astrbot-application') and scenario in ('text','media','large-media','crash-media','receipt-loss','runtime-crash','listener-swap')
+    assert framework in ('nonebot', 'astrbot','astrbot-application') and scenario in ('text','media','large-media','crash-media','receipt-loss','runtime-crash','listener-swap','configuration-swap')
     application=framework=='astrbot-application'
-    listener_swap=scenario=='listener-swap'
+    configuration_swap=scenario=='configuration-swap'
+    listener_swap=scenario in ('listener-swap','configuration-swap')
     crash=scenario=='crash-media'
     runtime_crash=scenario=='runtime-crash'
     loss=scenario in ('receipt-loss','runtime-crash')
@@ -62,7 +63,7 @@ def run(framework,scenario='text'):
     per_account=len(cases)
     per_round=per_account*len(ACCOUNTS)
     source, source_sha = load_checked()
-    output = ROOT/('.bin/deployment-listener-swap-results' if listener_swap else '.bin/deployment-runtime-crash-results' if runtime_crash else '.bin/deployment-receipt-results' if loss else '.bin/deployment-crash-results' if crash else '.bin/deployment-large-results' if large else '.bin/deployment-application-results' if application else '.bin/deployment-media-results' if scenario=='media' else '.bin/deployment-results')/(framework+'.json')
+    output = ROOT/('.bin/deployment-configuration-swap-results' if configuration_swap else '.bin/deployment-listener-swap-results' if listener_swap else '.bin/deployment-runtime-crash-results' if runtime_crash else '.bin/deployment-receipt-results' if loss else '.bin/deployment-crash-results' if crash else '.bin/deployment-large-results' if large else '.bin/deployment-application-results' if application else '.bin/deployment-media-results' if scenario=='media' else '.bin/deployment-results')/(framework+'.json')
     output.parent.mkdir(exist_ok=True)
     output.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix='wechat-deployment-') as directory:
@@ -303,11 +304,23 @@ def run(framework,scenario='text'):
                 drivers_before_swap = {name: inspect(name) for name in ACCOUNTS}
                 login_before_swap = {name: request_json('http://'+row['onebot_address']+'/get_login_info',BOT)['data'] for name,row in before_swap.items()}
                 kept_peer_pid = peer.pid
-                for index,name in enumerate(ACCOUNTS):
-                    path = '/accounts/'+name+'/listener'
-                    saved = admin(path)
-                    plan = dict(saved['saved'],listen=before_swap[ACCOUNTS[1-index]]['onebot_address'])
-                    admin(path,'POST',{'revision':saved['revision'],'plan':plan})
+                configuration_revision = None
+                if configuration_swap:
+                    configuration = admin('/configuration')
+                    plan = configuration['saved']
+                    for account in plan['accounts']:
+                        index = ACCOUNTS.index(account['name'])
+                        account['listen'] = before_swap[ACCOUNTS[1-index]]['onebot_address']
+                    saved_configuration = admin('/configuration','POST',{'revision':configuration['revision'],'plan':plan})
+                    assert saved_configuration['persistence']=='ready' and saved_configuration['saved']==plan
+                    configuration_revision = saved_configuration['revision']
+                    assert {row['name']:row for row in accounts()}==before_swap,'whole save activated runtime changes'
+                else:
+                    for index,name in enumerate(ACCOUNTS):
+                        path = '/accounts/'+name+'/listener'
+                        saved = admin(path)
+                        plan = dict(saved['saved'],listen=before_swap[ACCOUNTS[1-index]]['onebot_address'])
+                        admin(path,'POST',{'revision':saved['revision'],'plan':plan})
                 preview = admin('/listeners')
                 assert preview['applied'] is False
                 applied = admin('/listeners/apply','POST',{'revision':preview['revision']})
@@ -325,8 +338,24 @@ def run(framework,scenario='text'):
                 listener_swap_evidence = {'before':before_swap,'after':after_swap,'revision':preview['revision'],
                     'same_framework_process':True,'reverse_connections_unchanged':True,'native_driver_facts_unchanged':True,
                     'account_ids_preserved':True,'old_media_ids_and_bytes_preserved':True,'extra_native_downloads':0}
+                if configuration_swap:
+                    # Reopen the actual Host after the whole configuration was
+                    # saved, retaining the same external framework process.
+                    stop(host_process)
+                    host_process,host_log = start('host')
+                    points = wait_for(addresses,processes)
+                    reopened = wait_for(connected,processes)
+                    configuration = admin('/configuration')
+                    assert configuration['revision']==configuration_revision and configuration['persistence']=='ready'
+                    assert {row['name']:row['onebot_address'] for row in reopened}=={name:row['onebot_address'] for name,row in after_swap.items()}
+                    host_reopen_downloads={name:inspect(name)['synthetic_downloads'] for name in ACCOUNTS}
+                    assert host_reopen_downloads==dict.fromkeys(ACCOUNTS,0)
+                    media_references_still_readable(old_media,host_reopen_downloads)
+                    assert peer.pid==kept_peer_pid and peer.poll() is None
+                    listener_swap_evidence['whole_configuration']={'revision':configuration_revision,'persisted_after_host_reopen':True,'framework_process_retained_during_reopen':True,'all_saved_values_preserved':configuration['saved']==plan}
+                    assert listener_swap_evidence['whole_configuration']['all_saved_values_preserved']
                 restarted_accounts = accounts()
-            after_host = exercise('host_reopen_and_listener_swap' if listener_swap else 'host_reopen', per_round)
+            after_host = exercise('host_reopen_and_configuration_swap' if configuration_swap else 'host_reopen_and_listener_swap' if listener_swap else 'host_reopen', per_round)
             for first, after in zip(initial, after_host):
                 assert (first['self_id'], first['user_id']) == (after['self_id'], after['user_id'])
             for old in old_messages:
@@ -581,7 +610,7 @@ def run(framework,scenario='text'):
                 'runtime_fixture_binary_sha256': binary_sha,
                 'binary_snapshot':'private executable copy verified before each start and after all host runs',
                 'peer_snapshot':'private read-only peer/probe scripts and pinned committed AstrBot archive',
-                'deployment_source_path':'reports/deployment-source-'+source_sha+'.json',
+                'deployment_source_path':'.bin/reports/deployment-source-'+source_sha+'.json',
                 'deployment_source_sha256':source_sha,
                 'limitations': ['Synthetic terminalization does not execute the native text transport or prove live delivery',
                     'Actual Host SIGKILL after known synthetic acceptance; consumer stays alive; not unknown native platform commit or power loss' if runtime_crash else 'OneBot response is lost after a known synthetic accepted receipt; not native platform receipt loss' if loss else 'Deliberate crash interrupts source fetch before Submit, not native CDN, post-commit receipt ambiguity or runtime process crash' if crash else 'Framework reopen is graceful in this scenario',

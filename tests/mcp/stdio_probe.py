@@ -214,7 +214,7 @@ def run():
             'active_sigterm_cancelled_http_and_removed_partial':True,'idle_sigterm_exit_zero':True,'post_cancel_owner_reopen':True,'runtime_stream_cleanup_zero':True,
             'stdout_backpressure_sigterm_exit_zero':True,'stdout_backpressure_owner_reopen':True,
             'invalid_configurations_rejected':invalid,'all_success_path_processes_exit_zero':True,'no_forced_kill_in_success_path':True,
-            'binaries_sha256':hashes,'binary_snapshot':'private0500 copies verified before/after execution','mcp_source_path':'reports/mcp-source-'+source_sha+'.json','mcp_source_sha256':source_sha,
+            'binaries_sha256':hashes,'binary_snapshot':'private0500 copies verified before/after execution','mcp_source_path':'.bin/reports/mcp-source-'+source_sha+'.json','mcp_source_sha256':source_sha,
             'runtime_input_files':len(capture['runtime_inputs']),'live_wechat_or_model_requests':0,'native_protocol_session_started':False,
             'limits':['16MiB native/SDK ceiling unchanged','Python protocol client only, not a third-party MCP SDK','No native platform session/CDN transport, full AstrBot pipeline,4GiB or long-duration capacity proof']}
     except Exception:

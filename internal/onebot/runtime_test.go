@@ -230,12 +230,32 @@ func TestSendMapsTargetAndWaitsForReceipt(t *testing.T) {
 	}
 }
 func jsonNumber(v int64) string { raw, _ := json.Marshal(v); return string(raw) }
+
+type cancelAfterSubmitChannel struct {
+	*fakeChannel
+	cancel context.CancelFunc
+}
+
+func (c *cancelAfterSubmitChannel) Submit(ctx context.Context, request bot.Send) (bot.Delivery, error) {
+	delivery, err := c.fakeChannel.Submit(ctx, request)
+	if err == nil {
+		c.cancel()
+	}
+	return delivery, err
+}
+
 func TestPendingSendIsNotSuccessAndIsNotReplayed(t *testing.T) {
 	r, c := fixture(t)
 	c.pending = true
-	r.ActionTimeout = 5 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.Channel = &cancelAfterSubmitChannel{fakeChannel: c, cancel: cancel}
 	id, _ := r.State.ID("account-a", "user", "friend")
-	result := invoke(t, r, "send_private_msg", `{"user_id":`+jsonNumber(id)+`,"message":"hello","wechat_request_id":"pending"}`)
+	var params map[string]json.RawMessage
+	_ = json.Unmarshal([]byte(`{"user_id":`+jsonNumber(id)+`,"message":"hello","wechat_request_id":"pending"}`), &params)
+	// Cancel only after the synthetic channel has committed the submission.
+	// A short wall-clock deadline can expire during ID/storage work instead.
+	result := r.Invoke(ctx, Request{Action: "send_private_msg", Params: params, Echo: json.RawMessage(`{"id":42}`)})
 	if result.Retcode == 0 || result.Message != "delivery_pending_or_unknown" || len(c.sends) != 1 {
 		t.Fatal(result)
 	}

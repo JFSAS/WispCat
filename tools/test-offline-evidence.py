@@ -23,7 +23,7 @@ def main():
         directory = Path(raw)
         project = directory / 'synthetic-project'
         (project / 'tools').mkdir(parents=True)
-        (project / 'reports').mkdir()
+        (project / '.bin' / 'reports').mkdir(parents=True)
         (project / 'go.mod').write_text('module github.com/JFSAS/wechat-runtime\n\ngo 1.25\n')
         (project / 'fixture.go').write_text('package fixture\n')
         fixture_parser = project / 'tools/report-runtime-soak.py'

@@ -54,6 +54,7 @@ type inboundSettings struct {
 	top                         Config
 	configSource                func() Config
 	changes                     *sync.Mutex
+	ready                       func() error
 }
 
 func newInboundSettings(directory string, top Config, account Account) *inboundSettings {
@@ -71,6 +72,11 @@ func (s *inboundSettings) save(revision string, plan inboundPlan) error {
 	if s.changes != nil {
 		s.changes.Lock()
 		defer s.changes.Unlock()
+	}
+	if s.ready != nil {
+		if err := s.ready(); err != nil {
+			return err
+		}
 	}
 	account := s.base
 	account.Listen, account.TokenEnv = plan.Listen, plan.TokenEnv
@@ -126,6 +132,11 @@ func (s *inboundSettings) apply(ctx context.Context) error {
 	if s.changes != nil {
 		s.changes.Lock()
 		defer s.changes.Unlock()
+	}
+	if s.ready != nil {
+		if err := s.ready(); err != nil {
+			return err
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -107,6 +107,11 @@ func (s *topologySettings) save(revision string, plan topologyPlan) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h := s.host
+	h.listenerChanges.Lock()
+	defer h.listenerChanges.Unlock()
+	if err := h.configurationReady(); err != nil {
+		return err
+	}
 	h.mu.Lock()
 	top, closed := h.config, h.closed
 	owners := append([]*accountRuntime(nil), h.accounts...)
@@ -260,6 +265,9 @@ func (s *topologySettings) apply(ctx context.Context) (err error) {
 			h.listenerChanges.Unlock()
 		}
 	}()
+	if err = h.configurationReady(); err != nil {
+		return err
+	}
 	top.Accounts = cloneTopology(s.saved).Accounts
 	top, err = effectiveAccounts(top)
 	if err != nil {
@@ -341,6 +349,9 @@ func (s *topologySettings) apply(ctx context.Context) (err error) {
 		owner.connections.configSource = h.currentConfig
 		owner.inbound.configSource = h.currentConfig
 		owner.inbound.changes = &h.listenerChanges
+		owner.inbound.ready = h.configurationReady
+		owner.connections.changes = &h.listenerChanges
+		owner.connections.ready = h.configurationReady
 		initial[owner], err = owner.connections.specs(owner.connections.saved)
 		if err != nil {
 			s.lastError = "topology_preflight_failed"

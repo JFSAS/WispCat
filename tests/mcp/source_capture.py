@@ -25,6 +25,7 @@ if __name__=='__main__':
     else:
         raw=encode({'schema':1,'runtime_inputs':runtime_inputs(ROOT)})
         digest=hashlib.sha256(raw).hexdigest()
+        (ROOT/'.bin'/'reports').mkdir(parents=True, exist_ok=True)
         (ROOT/'.bin/mcp-source.json').write_bytes(raw)
-        (ROOT/'reports'/('mcp-source-'+digest+'.json')).write_bytes(raw)
+        (ROOT/'.bin'/'reports'/('mcp-source-'+digest+'.json')).write_bytes(raw)
     print(digest)

@@ -143,7 +143,8 @@ def run(framework='nonebot'):
                           reconnect_handled=resumed['handled'], multi_account_verified=True,
                           account_count=len(ACCOUNTS))
             result['stream_upload_and_cleanup_verified'] = True
-            target = ROOT / 'reports' / f'{framework}-integration.json'
+            target = ROOT / '.bin' / 'reports' / f'{framework}-integration.json'
+            target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(json.dumps(result, indent=2) + '\n')
             print(json.dumps(result))
         except Exception:

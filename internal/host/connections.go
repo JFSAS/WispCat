@@ -18,7 +18,13 @@ import (
 )
 
 func effectiveConfig(c Config) (Config, error) {
-	var err error
+	journal, err := readConfigurationJournal(c.StateDir)
+	if err != nil {
+		return c, err
+	}
+	if journal != nil {
+		return journal.Plan.config(c.StateDir), nil
+	}
 	c, err = effectiveManagement(c)
 	if err != nil {
 		return c, err
@@ -47,6 +53,16 @@ func effectiveAccounts(c Config) (Config, error) {
 	if err := c.validate(false); err != nil {
 		return c, err
 	}
+	c, err = savedConnections(c)
+	if err != nil {
+		return c, err
+	}
+	return c, c.Validate()
+}
+
+// Load bounded saved values without resolving environment credentials. The
+// aggregate editor must remain readable when repairing a retired reference.
+func savedConnections(c Config) (Config, error) {
 	c.Accounts = append([]Account{}, c.Accounts...)
 	for i, a := range c.Accounts {
 		p, err := instances.Preview(c.StateDir, a.Instance)
@@ -68,7 +84,7 @@ func effectiveAccounts(c Config) (Config, error) {
 		}
 		c.Accounts[i].Reverse, c.Accounts[i].HTTPPost = plan.Reverse, plan.HTTPPost
 	}
-	return c, c.Validate()
+	return c, nil
 }
 
 type connectionPlan struct {
@@ -84,6 +100,8 @@ type connectionSettings struct {
 	base                        Account
 	top                         Config
 	configSource                func() Config
+	changes                     *sync.Mutex
+	ready                       func() error
 }
 
 func planRevision(plan connectionPlan) string {
@@ -149,6 +167,15 @@ func (s *connectionSettings) view() map[string]any {
 	return map[string]any{"saved": s.saved, "revision": s.revision, "active_revision": s.active, "applied": s.active == s.revision, "error": s.lastError}
 }
 func (s *connectionSettings) save(revision string, plan connectionPlan) error {
+	if s.changes != nil {
+		s.changes.Lock()
+		defer s.changes.Unlock()
+	}
+	if s.ready != nil {
+		if err := s.ready(); err != nil {
+			return err
+		}
+	}
 	if err := s.validate(plan); err != nil {
 		return err
 	}
@@ -172,6 +199,15 @@ func (s *connectionSettings) save(revision string, plan connectionPlan) error {
 	return nil
 }
 func (s *connectionSettings) apply(ctx context.Context) error {
+	if s.changes != nil {
+		s.changes.Lock()
+		defer s.changes.Unlock()
+	}
+	if s.ready != nil {
+		if err := s.ready(); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.manager == nil {

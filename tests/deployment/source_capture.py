@@ -73,6 +73,7 @@ if __name__ == '__main__':
     else:
         raw = encode(capture())
         digest = hashlib.sha256(raw).hexdigest()
+        (ROOT/'.bin'/'reports').mkdir(parents=True, exist_ok=True)
         (ROOT/'.bin/deployment-source.json').write_bytes(raw)
-        (ROOT/'reports'/('deployment-source-'+digest+'.json')).write_bytes(raw)
+        (ROOT/'.bin'/'reports'/('deployment-source-'+digest+'.json')).write_bytes(raw)
     print(digest)

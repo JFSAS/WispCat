@@ -170,6 +170,11 @@ func (s *managementSettings) operationView(id string) (map[string]string, bool) 
 	return nil, false
 }
 func (s *managementSettings) save(revision string, plan managementPlan) error {
+	s.host.listenerChanges.Lock()
+	defer s.host.listenerChanges.Unlock()
+	if err := s.host.configurationReady(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -209,6 +214,11 @@ func (s *managementSettings) save(revision string, plan managementPlan) error {
 	return nil
 }
 func (s *managementSettings) begin(ctx context.Context) (*managementOperation, error) {
+	s.host.listenerChanges.Lock()
+	defer s.host.listenerChanges.Unlock()
+	if err := s.host.configurationReady(); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.manager == nil {

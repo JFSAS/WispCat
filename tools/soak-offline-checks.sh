@@ -5,7 +5,7 @@ set -eu
 cd "$(dirname "$0")/.."
 export GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local GOENV=off
 export WECHAT_SOAK_DURATION="${WECHAT_SOAK_DURATION:-10m}"
-mkdir -p .bin reports
+mkdir -p .bin/reports
 case "$(uname -s)" in
   Darwin)
     platform=macos
@@ -28,4 +28,4 @@ if [ "$platform" = macos ]; then
 else
   sh tools/go.sh test -race -count=1 -timeout 70m -json -tags runtimefixtures -ldflags "$soak_ldflags" ./internal/service -run '^TestRuntimeOfflineSoak$' > "$soak_run/tests.jsonl"
 fi
-python3 tools/report-runtime-soak.py summarize "$soak_run/tests.jsonl" --manifest "$manifest" --report "reports/$platform-runtime-soak.json"
+python3 tools/report-runtime-soak.py summarize "$soak_run/tests.jsonl" --manifest "$manifest" --report ".bin/reports/$platform-runtime-soak.json"

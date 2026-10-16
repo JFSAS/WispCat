@@ -203,7 +203,7 @@ async def run():
             'sdk_termination_escalations':len(escalations),'instrumentation':'Transparent observation of actual SDK subprocess create/termination; no transport/session/schema/response replacement',
             'request_dispatch':{'concurrent_ping_and_action_during_stalled_download':True,'cancellation_notification_closed_http_and_removed_partial':True,'cancelled_owner_reopened':True,'request_id_observation':'Read only next-ID counter of pinned SDK to address the public cancellation notification'},
             'files':[{'bytes':item['bytes'],'sha256':item['sha256'],'frames':item['frames']} for item in files],
-            'mcp_source_path':'reports/mcp-source-'+source_sha+'.json','mcp_source_sha256':source_sha,'runtime_input_files':len(capture['runtime_inputs']),
+            'mcp_source_path':'.bin/reports/mcp-source-'+source_sha+'.json','mcp_source_sha256':source_sha,'runtime_input_files':len(capture['runtime_inputs']),
             'binaries_sha256':hashes,'binary_snapshot':'private0500 executable copies checked before/after',
             'live_wechat_or_model_requests':0,'native_protocol_session_started':False,
             'limits':['Only the recorded SDK version/platform','At most8 active tools per session; local file operations remain serial; cancellation cannot undo committed runtime/platform effects','16MiB native ceiling; no live platform or model operation']}

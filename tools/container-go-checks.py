@@ -114,7 +114,8 @@ def main():
             assert summary['result'] == 'pass'
             manifest_bytes = (json.dumps(source, indent=2) + '\n').encode()
             manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
-            published = ROOT / 'reports' / ('container-go-source-' + manifest_sha + '.json')
+            published = ROOT / '.bin' / 'reports' / ('container-go-source-' + manifest_sha + '.json')
+            published.parent.mkdir(parents=True, exist_ok=True)
             if published.exists():
                 assert published.read_bytes() == manifest_bytes
             else:

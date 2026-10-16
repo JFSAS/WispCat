@@ -73,7 +73,8 @@ def main():
             raise SystemExit('Events/replies did not balance')
         if configured >= 60000 and (account['stream_roundtrips'] < 1 or account['heartbeats'] < 1):
             raise SystemExit('Timed run did not exercise streams and heartbeats')
-    published = ROOT / 'reports' / ('runtime-soak-source-' + manifest_sha + '.json')
+    published = ROOT / '.bin' / 'reports' / ('runtime-soak-source-' + manifest_sha + '.json')
+    published.parent.mkdir(parents=True, exist_ok=True)
     try:
         with published.open('xb') as output:
             output.write(manifest_bytes)

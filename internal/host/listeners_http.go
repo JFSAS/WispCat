@@ -59,6 +59,9 @@ func (h *Host) listenerBatchView() map[string]any {
 func (h *Host) applySavedListeners(ctx context.Context, revision string) error {
 	owners, unlock := h.lockListeners()
 	defer unlock()
+	if err := h.configurationReady(); err != nil {
+		return err
+	}
 	h.mu.Lock()
 	running := h.started && !h.closed
 	h.mu.Unlock()

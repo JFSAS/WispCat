@@ -32,7 +32,8 @@ with tempfile.TemporaryDirectory(prefix='astrbot-full-preflight-') as directory:
         installed_adapter_dependencies={name: importlib.metadata.version(name) for name in ['aiocqhttp','quart','hypercorn']},
         adapter_dependency_lock_sha256=hashlib.sha256((ROOT/'tests/framework/astrbot-requirements.lock').read_bytes()).hexdigest(),
         dependency_downloads=False, live_wechat_or_model_requests=0)
-    (ROOT/'reports/astrbot-application-preflight.json').write_text(json.dumps(result, indent=2)+'\n')
+    (ROOT/'.bin/reports').mkdir(parents=True, exist_ok=True)
+    (ROOT/'.bin/reports/astrbot-application-preflight.json').write_text(json.dumps(result, indent=2)+'\n')
     print(json.dumps(result))
     if result['result'] == 'unavailable':
         sys.exit(2)
