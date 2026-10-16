@@ -118,3 +118,12 @@ func (h *Host) DeploymentInspect(name string) (service.DeploymentObservation, er
 	defer release()
 	return driver.Inspect(), nil
 }
+
+func (h *Host) DeploymentInjectMedia(name, kind, mediaKind string) error {
+	driver, release, err := h.fixtureLease(name)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return driver.InjectMedia(kind, mediaKind)
+}

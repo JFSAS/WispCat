@@ -96,6 +96,7 @@ func run() error {
 			Kind      string `json:"kind"`
 			Text      string `json:"text"`
 			Mentioned bool   `json:"mentioned"`
+			Media     string `json:"media,omitempty"`
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 4096)
 		defer r.Body.Close()
@@ -105,7 +106,13 @@ func run() error {
 			w.WriteHeader(400)
 			return
 		}
-		if err := h.DeploymentInject(q.Account, q.Kind, q.Text, q.Mentioned); err != nil {
+		var err error
+		if q.Media != "" {
+			err = h.DeploymentInjectMedia(q.Account, q.Kind, q.Media)
+		} else {
+			err = h.DeploymentInject(q.Account, q.Kind, q.Text, q.Mentioned)
+		}
+		if err != nil {
 			w.WriteHeader(409)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "fixture_injection_failed"})
 			return

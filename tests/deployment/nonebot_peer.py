@@ -1,5 +1,6 @@
 """Actual NoneBot application/driver and plugin lifecycle, no provider/model."""
 import importlib.metadata
+import base64
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ from nonebot.adapters.onebot.v11 import Adapter, Bot, MessageEvent, MessageSegme
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'framework'))
 from stream_probe import probe
+from media_probe import probe as media_probe
 
 report = Path(os.environ['FRAMEWORK_REPORT'])
 nonebot.init(driver='~fastapi', host='127.0.0.1', port=int(os.environ['FRAMEWORK_PORT']),
@@ -61,7 +63,8 @@ matcher = on_message(priority=1, block=True)
 @matcher.handle()
 async def reply(bot: Bot, event: MessageEvent):
     text = event.get_plaintext().strip()
-    if text not in ('/private-ping', '/group-ping'):
+    media = [part for part in event.message if part.type in ('image','file')]
+    if not media and text not in ('/private-ping', '/group-ping'):
         return
     login, status = await bot.get_login_info(), await bot.get_status()
     assert int(login['user_id']) == int(bot.self_id)
@@ -72,10 +75,22 @@ async def reply(bot: Bot, event: MessageEvent):
         member = await bot.get_group_member_info(group_id=event.group_id, user_id=event.user_id)
         assert member['user_id'] == event.user_id and member['wechat_roster_complete'] is False
         assert event.is_tome()
-    result = await bot.send(event, MessageSegment.text('pong:' + text), at_sender=group)
+    extra = {}
+    if media:
+        assert len(media) == 1
+        part = media[0]
+        content,extra = await media_probe(bot.call_api,event.self_id,{'type':part.type,'data':part.data},event.sender.nickname)
+        if part.type == 'image':
+            outgoing=MessageSegment.image('base64://'+base64.b64encode(content).decode())
+        else:
+            outgoing=MessageSegment('file',{'file':part.data['url'],'name':'reply.bin'})
+        result=await bot.send(event,outgoing,at_sender=False)
+    else:
+        result = await bot.send(event, MessageSegment.text('pong:' + text), at_sender=group)
     state['handled'].append({'kind': event.message_type, 'self_id': event.self_id,
         'user_id': event.user_id, 'message_id': result['message_id'], 'to_me': event.is_tome(),
-        'member_lookup_verified': group, 'stream_upload_verified': upload})
+        'member_lookup_verified': group, 'stream_upload_verified': upload,
+        'received_message_id':event.message_id,**extra})
     save()
 
 

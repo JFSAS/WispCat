@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "image_base64": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGP4H6DxH4QZYAwAWPoJ2a6ZYAYAAAAASUVORK5CYII=",
+  "file_template": "synthetic deployment file for {account}\n",
+  "file_name": "fixture.bin"
+}

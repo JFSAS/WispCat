@@ -3,6 +3,9 @@
 Run only under enforced loopback isolation. No platform session loop is started.
 """
 import hashlib
+import asyncio
+import urllib.parse
+import httpx
 import json
 import os
 from pathlib import Path
@@ -17,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 from offline_api import request_json
 from source_capture import load_checked, freeze
+from media_probe import payload,fetch,local_media_url
 
 ADMIN = 'synthetic-deployment-admin-token'
 BOT = 'synthetic-deployment-onebot-token'
@@ -40,10 +44,14 @@ def wait_for(callback, processes, timeout=30):
     raise TimeoutError('offline deployment did not reach its required state')
 
 
-def run(framework):
-    assert framework in ('nonebot', 'astrbot')
+def run(framework,scenario='text'):
+    assert framework in ('nonebot', 'astrbot') and scenario in ('text','media')
+    media_kinds=['text','image','file'] if scenario=='media' else ['text']
+    cases=[(kind,media) for media in media_kinds for kind in ['private','group']]
+    per_account=len(cases)
+    per_round=per_account*len(ACCOUNTS)
     source, source_sha = load_checked()
-    output = ROOT/'.bin/deployment-results'/(framework+'.json')
+    output = ROOT/('.bin/deployment-media-results' if scenario=='media' else '.bin/deployment-results')/(framework+'.json')
     output.parent.mkdir(exist_ok=True)
     output.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix='wechat-deployment-') as directory:
@@ -126,7 +134,7 @@ def run(framework):
                 for row in rows:
                     status = row['status']
                     assert status['connection']['disk_read'] == 'not_attempted'
-                    for counter in ['auth_calls', 'sync_calls', 'send_calls', 'contact_list_calls', 'contact_brief_calls']:
+                    for counter in (['auth_calls','sync_calls','contact_list_calls','contact_brief_calls']+(['send_calls'] if scenario=='text' else [])):
                         assert status[counter] == 0, status
                 return rows
 
@@ -147,42 +155,78 @@ def run(framework):
             def exercise(phase, handled_count):
                 before = {name: len(inspect(name)['sends']) for name in ACCOUNTS}
                 for name in ACCOUNTS:
-                    for kind in ['private', 'group']:
-                        request_json(points['control'] + '/fixture/inject', CONTROL, 'POST', {'account': name, 'kind': kind, 'text': '/' + kind + '-ping', 'mentioned': kind == 'group'})
-                        handled_count += 1
-                        wait_for(lambda: peer_report.exists() and len(json.loads(peer_report.read_text())['handled']) == handled_count, processes)
-                handled = json.loads(peer_report.read_text())['handled'][-4:]
-                for private, group in zip(handled[::2], handled[1::2]):
-                    assert private['self_id'] == group['self_id'] and private['user_id'] == group['user_id']
-                    assert group['to_me'] and group['member_lookup_verified']
-                    assert private['stream_upload_verified'] and group['stream_upload_verified']
-                assert handled[0]['self_id'] != handled[2]['self_id'] and handled[0]['user_id'] != handled[2]['user_id']
-                receipt_ids = []
-                for name in ACCOUNTS:
-                    sent = inspect(name)['sends'][before[name]:]
-                    assert len(sent) == 2, sent
-                    assert sorted(row['kind'] for row in sent) == ['group', 'private']
+                    for kind,media in cases:
+                        value={'account':name,'kind':kind,'text':'/'+kind+'-ping','mentioned':kind=='group'}
+                        if media!='text':value['media']=media
+                        request_json(points['control']+'/fixture/inject',CONTROL,'POST',value)
+                        handled_count+=1
+                        wait_for(lambda: peer_report.exists() and len(json.loads(peer_report.read_text())['handled'])==handled_count,processes)
+                handled=json.loads(peer_report.read_text())['handled'][-per_round:]
+                receipt_ids=[]
+                for i,name in enumerate(ACCOUNTS):
+                    group=handled[i*per_account:(i+1)*per_account]
+                    assert len({item['self_id'] for item in group})==1
+                    assert len({item['user_id'] for item in group})==1
+                    for item,(kind,media) in zip(group,cases):
+                        assert item['kind']==kind and item.get('media','text')==media
+                        assert item['to_me'] and item['stream_upload_verified']
+                        assert item['member_lookup_verified']==(kind=='group')
+                        if media!='text':assert item['media_sha256']==hashlib.sha256(payload(media,name)).hexdigest()
+                    wait_for(lambda:len(inspect(name)['sends'])==before[name]+per_account,processes)
+                    sent=inspect(name)['sends'][before[name]:]
+                    assert sorted((row['kind'],row.get('media','text')) for row in sent)==sorted(cases),sent
                     for row in sent:
-                        assert row['synthetic_server_id'] > 0
-                        assert row['text'].endswith('pong:/' + row['kind'] + '-ping'), row
-                        assert row['mentions'] == (['fixture-friend-' + name] if row['kind'] == 'group' else []), row
+                        assert row['synthetic_server_id']>0
+                        media=row.get('media','text')
+                        if media=='text':
+                            assert row['text'].endswith('pong:/'+row['kind']+'-ping'),row
+                            assert row['mentions']==(['fixture-friend-'+name] if row['kind']=='group' else []),row
+                        else:
+                            body=payload(media,name)
+                            assert row['payload_bytes']==len(body) and row['payload_sha256']==hashlib.sha256(body).hexdigest(),row
+                            assert row['encoded_bytes']>0 and len(row['encoded_sha256'])==64 and row['mentions']==[],row
                         receipt_ids.append(row['synthetic_server_id'])
-                assert len(set(receipt_ids)) == 4
-                targets = {name: admin('/accounts/' + name + '/history')['cursor'] for name in ACCOUNTS}
-                wait_for(lambda: all(row['connections'][0].get('cursor', 0) >= targets[row['name']] for row in accounts()), processes)
-                observed = {'phase': phase, 'handled': handled, 'accounts': accounts(), 'drivers': {name: inspect(name) for name in ACCOUNTS}}
+                assert handled[0]['self_id']!=handled[per_account]['self_id']
+                assert handled[0]['user_id']!=handled[per_account]['user_id']
+                assert len(set(receipt_ids))==per_round
+                targets={name:admin('/accounts/'+name+'/history')['cursor'] for name in ACCOUNTS}
+                wait_for(lambda:all(row['connections'][0].get('cursor',0)>=targets[row['name']] for row in accounts()),processes)
+                observed={'phase':phase,'handled':handled,'accounts':accounts(),'drivers':{name:inspect(name) for name in ACCOUNTS}}
+                for row in observed['accounts']:
+                    assert row['status']['send_calls']==observed['drivers'][row['name']]['synthetic_uploads']
                 observations.append(observed)
                 return handled
+
+            def media_references_still_readable(records,expected_downloads):
+                rows={row['name']:row for row in accounts()}
+                for record in records:
+                    name=record['account'];base='http://'+rows[name]['onebot_address']
+                    result=request_json(base+'/get_msg',BOT,'POST',{'message_id':record['message_id']})
+                    assert result['retcode']==0
+                    part=next(part for part in result['data']['message'] if part['type']==record['media'])
+                    assert str(part['data']['file'])==record['file_id']
+                    url=part['data']['url'];local_media_url(url)
+                    assert asyncio.run(fetch(url))==payload(record['media'],name)
+                    other=next(row for label,row in rows.items() if label!=name)
+                    denied=urllib.parse.urlparse(url)._replace(netloc=other['onebot_address']).geturl()
+                    with httpx.Client(timeout=5,trust_env=False,follow_redirects=False) as client:
+                        assert client.get(denied).status_code==409
+                assert expected_downloads=={name:inspect(name)['synthetic_downloads'] for name in ACCOUNTS}
 
             first_accounts = wait_for(connected, processes)
             topology = admin('/topology')['saved']
             initial = exercise('initial', 0)
             old_messages = []
-            for row, item in zip(first_accounts, [initial[0], initial[2]]):
+            for row, item in zip(first_accounts, [initial[0], initial[per_account]]):
                 base = 'http://' + row['onebot_address']
                 reply = request_json(base + '/get_msg', BOT, 'POST', {'message_id': item['message_id']})
                 assert reply['retcode'] == 0, reply
                 old_messages.append({'account': row['name'], 'id': item['message_id'], 'data': reply['data']})
+            old_media=[]
+            for i,name in enumerate(ACCOUNTS):
+                for item in initial[i*per_account:(i+1)*per_account]:
+                    if item.get('media'):
+                        old_media.append({'account':name,'media':item['media'],'file_id':item['received_file_id'],'message_id':item['received_message_id']})
             # Stop the actual host process. A zero exit requires account workers,
             # requests, reverse transports, archives and shared index to join.
             stop(host_process)
@@ -190,7 +234,10 @@ def run(framework):
             points = wait_for(addresses, processes)
             assert request_json(points['control']+'/fixture/identity',CONTROL)['source_manifest_sha256'] == source_sha
             restarted_accounts = wait_for(connected, processes)
-            after_host = exercise('host_reopen', 4)
+            host_reopen_downloads={name:inspect(name)['synthetic_downloads'] for name in ACCOUNTS}
+            assert host_reopen_downloads==dict.fromkeys(ACCOUNTS,0),host_reopen_downloads
+            media_references_still_readable(old_media,host_reopen_downloads)
+            after_host = exercise('host_reopen', per_round)
             for first, after in zip(initial, after_host):
                 assert (first['self_id'], first['user_id']) == (after['self_id'], after['user_id'])
             for old in old_messages:
@@ -213,6 +260,7 @@ def run(framework):
             # sibling, using the ordinary authenticated topology interface.
             before = {row['name']: row for row in accounts()}
             sibling_generation = inspect('synthetic-b')['generation']
+            sibling_downloads = inspect('synthetic-b')['synthetic_downloads']
             old_generation = inspect('synthetic-a')['generation']
             current = admin('/topology')
             admin('/topology', 'POST', {'revision': current['revision'], 'plan': {'version': 1, 'accounts': [row for row in topology['accounts'] if row['name'] != 'synthetic-a']}})
@@ -230,7 +278,10 @@ def run(framework):
             wait_for(connected, processes)
             assert inspect('synthetic-a')['generation'] != old_generation
             assert inspect('synthetic-b')['generation'] == sibling_generation
-            after_membership = exercise('account_reenable', 4)
+            account_reenable_downloads={name:inspect(name)['synthetic_downloads'] for name in ACCOUNTS}
+            assert account_reenable_downloads=={'synthetic-a':0,'synthetic-b':sibling_downloads},account_reenable_downloads
+            media_references_still_readable(old_media,account_reenable_downloads)
+            after_membership = exercise('account_reenable', per_round)
             for first, after in zip(initial, after_membership):
                 assert (first['self_id'], first['user_id']) == (after['self_id'], after['user_id'])
             change_connections(False)
@@ -242,9 +293,14 @@ def run(framework):
                 'scope': 'Separate actual Host/Service/OneBot/storage/management process and actual framework process; synthetic native ingestion and terminal receipts; no native protocol session loop',
                 'framework_application_lifecycle': framework == 'nonebot', 'astrbot_full_application_started': False,
                 'observations': observations, 'old_messages_stable_after_host_reopen': True,
+                'old_media_references_cached_after_host_and_account_reopen':bool(old_media),
+                'downloads_before_new_injection_after_host_reopen':host_reopen_downloads,
+                'downloads_before_account_stop':{'synthetic-b':sibling_downloads},
+                'downloads_before_new_injection_after_account_reenable':account_reenable_downloads,
+                'cross_account_signed_media_denied':bool(old_media),
                 'account_stop_reenable_preserved_ids': True, 'retained_sibling_worker_and_port': True,
                 'host_process_starts': starts['host'], 'framework_process_starts': starts['peer'],
-                'synthetic_replies': 16, 'graceful_host_shutdowns': 2,
+                'synthetic_replies':per_round*4, 'scenario':scenario, 'synthetic_media_replies':(per_round-4)*4, 'graceful_host_shutdowns': 2,
                 'nonebot_shutdown_hooks': [first_peer, final_peer] if framework == 'nonebot' else [],
                 'astrbot_adapter_shutdowns': [first_peer,final_peer] if framework=='astrbot' else [],
                 'no_forced_kill_in_success_path': True, 'real_protocol_calls': 0, 'live_wechat_or_model_requests': 0,
@@ -255,9 +311,9 @@ def run(framework):
                 'deployment_source_sha256':source_sha,
                 'limitations': ['Synthetic terminalization does not execute the native text transport or prove live delivery',
                     'No exactly-once consumer processing guarantee', 'AstrBot uses its real adapter and local consumer; full app has an unavailable offline dependency',
-                    'Native media upload/download is not covered by this text/stream-control deployment fixture']}
+                    'CDN/profile discovery and platform exchanges are synthetic; native media workers/preparation/body encoders are exercised locally']}
             output.write_text(json.dumps(result, indent=2) + '\n')
-            print(json.dumps({'result': 'pass', 'framework': framework, 'synthetic_replies': 16, 'host_starts': 2, 'framework_starts': 2}))
+            print(json.dumps({'result': 'pass', 'framework': framework, 'synthetic_replies':per_round*4, 'scenario':scenario, 'synthetic_media_replies':(per_round-4)*4, 'host_starts': 2, 'framework_starts': 2}))
         except Exception:
             for log in logs:
                 log.flush(); log.seek(0); sys.stderr.write(log.read()[-10000:])
@@ -276,4 +332,4 @@ def run(framework):
 
 
 if __name__ == '__main__':
-    run(sys.argv[1] if len(sys.argv) > 1 else 'nonebot')
+    run(sys.argv[1] if len(sys.argv) > 1 else 'nonebot',sys.argv[2] if len(sys.argv)>2 else 'text')

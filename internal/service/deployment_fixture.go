@@ -5,19 +5,15 @@ package service
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/cdn"
 	"github.com/JFSAS/wechat-runtime/internal/protocol"
 	"github.com/JFSAS/wechat-runtime/internal/store"
 )
@@ -26,27 +22,36 @@ import (
 // It owns real Service state/history/queues, but NEVER calls Service.Start,
 // Authenticate, Sync or text transport. Terminal receipts are synthetic facts.
 type DeploymentDriver struct {
-	service    *Service
-	label      string
-	done       chan struct{}
-	mu         sync.Mutex
-	err        error
-	sends      []DeploymentSend
-	generation string
+	service            *Service
+	label              string
+	done               chan struct{}
+	mu                 sync.Mutex
+	err                error
+	sends              []DeploymentSend
+	generation         string
+	pendingMedia       map[string]DeploymentSend
+	downloads, uploads uint64
 }
 
 type DeploymentObservation struct {
 	Generation string           `json:"generation"`
 	Sends      []DeploymentSend `json:"sends"`
 	Error      string           `json:"error"`
+	Downloads  uint64           `json:"synthetic_downloads"`
+	Uploads    uint64           `json:"synthetic_uploads"`
 }
 
 type DeploymentSend struct {
-	ID       string   `json:"id"`
-	Text     string   `json:"text"`
-	Kind     string   `json:"kind"`
-	Mentions []string `json:"mentions"`
-	ServerID uint64   `json:"synthetic_server_id"`
+	ID           string   `json:"id"`
+	Text         string   `json:"text"`
+	Kind         string   `json:"kind"`
+	Mentions     []string `json:"mentions"`
+	ServerID     uint64   `json:"synthetic_server_id"`
+	Media        string   `json:"media,omitempty"`
+	PayloadBytes int      `json:"payload_bytes,omitempty"`
+	PayloadSHA   string   `json:"payload_sha256,omitempty"`
+	EncodedBytes int      `json:"encoded_bytes,omitempty"`
+	EncodedSHA   string   `json:"encoded_sha256,omitempty"`
 }
 
 func NewDeploymentDriver(s *Service, label string) (*DeploymentDriver, error) {
@@ -63,7 +68,7 @@ func NewDeploymentDriver(s *Service, label string) (*DeploymentDriver, error) {
 		return nil, err
 	}
 	if !exists {
-		s.data = &store.Data{Schema: 1, Binding: bootstrap.Binding(), SourceApp: s.source.App, APIKey: bytes.Clone(seed[:]), NextClientID: 1, Jobs: map[string]*store.Job{}, Session: &protocol.Session{Bootstrap: bootstrap, Original: bytes.Repeat([]byte{2}, 16), ClientKey: bytes.Repeat([]byte{3}, 24), ServerKey: bytes.Repeat([]byte{4}, 24)}}
+		s.data = &store.Data{Schema: 1, Binding: bootstrap.Binding(), SourceApp: s.source.App, APIKey: bytes.Clone(seed[:]), NextClientID: 1, Jobs: map[string]*store.Job{}, Session: &protocol.Session{Bootstrap: bootstrap, Original: bytes.Repeat([]byte{2}, 16), ClientKey: bytes.Repeat([]byte{3}, 24), ServerKey: bytes.Repeat([]byte{4}, 24), Profile: protocol.MacCompatibilityProfile()}}
 		s.checkpoint = store.Checkpoint{Directory: filepath.Join(s.directory, "checkpoints"), Binding: s.data.Binding}
 		if err := s.saveLocked(); err != nil {
 			return nil, err
@@ -137,28 +142,9 @@ func deploymentCheckpoint(directory string) (store.Checkpoint, bool, error) {
 
 func (d *DeploymentDriver) Start(ctx context.Context, mode string) {
 	s := d.service
-	s.SetMediaDownloader(func(context.Context, MediaDownloadRequest) (*cdn.Result, error) {
-		return nil, errors.New("deployment_fixture_has_no_remote_media")
-	})
-	s.SetMediaSender(func(ctx context.Context, request MediaSendRequest) (MediaSendResult, error) {
-		if err := ctx.Err(); err != nil {
-			return MediaSendResult{}, err
-		}
-		progress := request.Metadata
-		progress.Stage, progress.FileID = "uploaded", "synthetic-deployment-upload"
-		progress.MD5 = fmt.Sprintf("%x", md5.Sum(request.Data))
-		progress.UploadSize = uint32(len(request.Data))
-		if err := request.SaveProgress(progress); err != nil {
-			return MediaSendResult{}, err
-		}
-		progress.Stage = "submitting"
-		if err := request.SaveProgress(progress); err != nil {
-			return MediaSendResult{}, err
-		}
-		sum := sha256.Sum256([]byte("synthetic-media/" + d.label + "/" + request.ID))
-		id := binary.BigEndian.Uint64(sum[:8]) | 1
-		return MediaSendResult{Receipt: protocol.MediaSubmissionReceipt{ServerAccepted: true, ServerID: id}, SubmissionStarted: true}, nil
-	})
+	s.SetMediaDownloader(d.downloadMedia)
+	(BotAdapter{Service: s, Archive: s.history.deliveryArchive}).wrapArchiveMediaDownloader()
+	s.SetMediaSender(d.sendMedia)
 	go func() {
 		defer close(d.done)
 		if mode != "offline" {
@@ -190,7 +176,7 @@ func (d *DeploymentDriver) Wait() { <-d.done }
 func (d *DeploymentDriver) Inspect() DeploymentObservation {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	v := DeploymentObservation{Generation: d.generation, Sends: append([]DeploymentSend{}, d.sends...)}
+	v := DeploymentObservation{Generation: d.generation, Sends: append([]DeploymentSend{}, d.sends...), Downloads: d.downloads, Uploads: d.uploads}
 	if d.err != nil {
 		v.Error = "deployment_fixture_failed"
 	}
@@ -243,12 +229,35 @@ func (d *DeploymentDriver) complete(ctx context.Context) error {
 		if err := s.sendMediaQueued(ctx, id); err != nil {
 			return err
 		}
+		s.mu.RLock()
+		binding := s.data.Binding
+		s.mu.RUnlock()
+		state, err := (BotAdapter{Service: s, Archive: s.history.deliveryArchive}).Delivery(binding, id)
+		if err != nil {
+			return err
+		}
+		if state.State == "accepted" || state.State == "echo_observed" {
+			d.mu.Lock()
+			row, ok := d.pendingMedia[id]
+			if ok {
+				d.sends = append(d.sends, row)
+				delete(d.pendingMedia, id)
+			}
+			d.mu.Unlock()
+		}
 	}
-	return nil
+	return s.downloadQueued(ctx)
 }
 
 func (d *DeploymentDriver) Inject(kind, text string, mentioned bool) error {
 	if (kind != "private" && kind != "group") || len(text) > 1024 || strings.TrimSpace(text) == "" {
+		return errors.New("invalid_fixture_event")
+	}
+	return d.injectMessage(kind, protocol.Message{Type: 1, Content: []byte(text)}, mentioned)
+}
+
+func (d *DeploymentDriver) injectMessage(kind string, message protocol.Message, mentioned bool) error {
+	if kind != "private" && kind != "group" {
 		return errors.New("invalid_fixture_event")
 	}
 	s := d.service
@@ -258,10 +267,13 @@ func (d *DeploymentDriver) Inject(kind, text string, mentioned bool) error {
 	if err != nil {
 		return err
 	}
-	message := protocol.Message{Sender: []byte("fixture-friend-" + d.label), Recipient: s.data.Session.Bootstrap.Username, Content: []byte(text), Type: 1, ServerID: 10000000 + stats.Cursor + 1, Timestamp: uint32(time.Now().Unix())}
+	message.Sender = []byte("fixture-friend-" + d.label)
+	message.Recipient = s.data.Session.Bootstrap.Username
+	message.ServerID = 10000000 + stats.Cursor + 1
+	message.Timestamp = uint32(time.Now().Unix())
 	if kind == "group" {
 		message.Sender = []byte("fixture-room-" + d.label + "@chatroom")
-		message.Content = append([]byte("fixture-friend-"+d.label+":\n"), []byte(text)...)
+		message.Content = append([]byte("fixture-friend-"+d.label+":\n"), message.Content...)
 		if mentioned {
 			source, err := protocol.MentionSource([]string{string(s.data.Session.Bootstrap.Username)})
 			if err != nil {

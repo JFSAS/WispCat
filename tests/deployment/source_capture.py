@@ -46,7 +46,7 @@ def load_checked():
 def freeze(temp, value):
     frozen = temp/'frozen'
     for name, digest in value['runtime_inputs'].items():
-        if not (name.startswith('tests/deployment/') or name == 'tests/framework/stream_probe.py'):
+        if not (name.startswith('tests/deployment/') or name in ('tests/framework/stream_probe.py','internal/service/deployment-media.json')):
             continue
         raw = (ROOT/name).read_bytes()
         assert hashlib.sha256(raw).hexdigest() == digest
