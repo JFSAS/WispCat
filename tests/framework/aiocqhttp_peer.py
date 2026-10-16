@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 from aiocqhttp import CQHttp, Event, MessageSegment
+from stream_probe import probe
 
 report = Path(os.environ['FRAMEWORK_REPORT'])
 bot = CQHttp(use_ws_reverse=True, import_name='runtime-fixture',
@@ -26,6 +27,7 @@ async def reply(event: Event):
     status = await bot.get_status(self_id=event.self_id)
     assert int(login['user_id']) == int(event.self_id)
     assert status['online'] and status['good']
+    stream_verified = await probe(lambda action, **params: getattr(bot, action)(**params), event.self_id, event.message_id)
     member_verified = False
     if event.message_type == 'group':
         member = await bot.get_group_member_info(group_id=event.group_id,
@@ -37,6 +39,7 @@ async def reply(event: Event):
     handled.append({'kind': event.message_type, 'user_id': event.user_id,
                     'self_id': event.self_id,
                     'member_lookup_verified': member_verified,
+                    'stream_upload_verified': stream_verified,
                     'to_me': event.message_type == 'private' or any(
                         segment['type'] == 'at' and
                         str(segment['data']['qq']) == str(event.self_id)

@@ -3,4 +3,6 @@
 *.test
 coverage.out
 runtime.local.json
+__pycache__/
+*.pyc
 /reports/

@@ -26,8 +26,10 @@ histories = [json.loads(event['Output'].split('EVENT_HISTORY_LOAD_REPORT=', 1)[1
              for event in events if 'EVENT_HISTORY_LOAD_REPORT=' in event.get('Output', '')]
 working_sets = [json.loads(event['Output'].split('WORKING_SET_LOAD_REPORT=', 1)[1])
                 for event in events if 'WORKING_SET_LOAD_REPORT=' in event.get('Output', '')]
+streams = [json.loads(event['Output'].split('STREAM_STORAGE_LOAD_REPORT=', 1)[1])
+           for event in events if 'STREAM_STORAGE_LOAD_REPORT=' in event.get('Output', '')]
 result = {'result': 'pass', 'top_level_passed': len(passed), 'top_level_skipped': len(skipped),
-          'skipped': skipped, 'passed_packages': packages, 'index_load': loads, 'archive_load': archives, 'history_load': histories, 'working_set_load': working_sets,
+          'skipped': skipped, 'passed_packages': packages, 'index_load': loads, 'archive_load': archives, 'history_load': histories, 'working_set_load': working_sets, 'stream_load': streams,
           'test_json_sha256': hashlib.sha256(raw).hexdigest()}
 if args.report:
     args.report.write_text(json.dumps(result, indent=2) + '\n')
@@ -41,4 +43,6 @@ for load in histories:
     print(json.dumps(load))
 
 for load in working_sets:
+    print(json.dumps(load))
+for load in streams:
     print(json.dumps(load))

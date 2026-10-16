@@ -51,6 +51,7 @@ def run(framework='nonebot'):
         port = unused_port()
         report = temp / 'framework.json'
         env = {'PATH': os.environ['PATH'], 'HOME': str(temp), 'PYTHONNOUSERSITE': '1',
+               'PYTHONDONTWRITEBYTECODE': '1',
                'PYTHONUNBUFFERED': '1', 'FRAMEWORK_PORT': str(port), 'FRAMEWORK_REPORT': str(report),
                'ASTRBOT_ROOT': str(temp), 'ASTRBOT_DISABLE_METRICS': '1'}
         processes = []
@@ -103,6 +104,7 @@ def run(framework='nonebot'):
                         assert group['Mentions'] == ['friend'], sends
                 handled = result['handled']
                 assert len(handled) == 4, handled
+                assert all(item['stream_upload_verified'] for item in handled), handled
                 for private, group in zip(handled[::2], handled[1::2]):
                     assert private['self_id'] == group['self_id'], handled
                     assert private['user_id'] == group['user_id'], handled
@@ -140,6 +142,7 @@ def run(framework='nonebot'):
                           live_wechat_requests=0, sent_replies=len(sends), reconnect_verified=True,
                           reconnect_handled=resumed['handled'], multi_account_verified=True,
                           account_count=len(ACCOUNTS))
+            result['stream_upload_and_cleanup_verified'] = True
             target = ROOT / 'reports' / f'{framework}-integration.json'
             target.write_text(json.dumps(result, indent=2) + '\n')
             print(json.dumps(result))

@@ -115,10 +115,15 @@ func (r *Runtime) prepareSend(ctx context.Context, params map[string]json.RawMes
 		var data []byte
 		if strings.HasPrefix(source, "base64://") {
 			data, err = base64.StdEncoding.DecodeString(strings.TrimPrefix(source, "base64://"))
+		} else if strings.HasPrefix(source, "stream://") {
+			data, err = r.streamUploadBytes(ctx, snap.Account, source)
 		} else {
 			data, err = fetchMedia(ctx, source)
 		}
 		total += len(data)
+		if errors.Is(err, errStreamStorage) || errors.Is(err, errStreamClosed) {
+			return req, bot.ErrStorage
+		}
 		if err != nil || len(data) == 0 || total > 16<<20 {
 			return req, errors.New("invalid_media")
 		}

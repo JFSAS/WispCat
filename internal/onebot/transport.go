@@ -258,6 +258,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	stop := context.AfterFunc(s.shutdown, cancel)
 	defer stop()
+	if streamAction(q.Action) {
+		controller := http.NewResponseController(w)
+		defer func() { _ = controller.SetWriteDeadline(time.Time{}) }()
+		w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+		w.WriteHeader(200)
+		_ = s.Runtime.InvokeFrames(ctx, q, func(out Response) error {
+			_ = controller.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if err := json.NewEncoder(w).Encode(out); err != nil {
+				return err
+			}
+			return controller.Flush()
+		})
+		return
+	}
 	respond(200, s.Runtime.Invoke(ctx, q))
 }
 
@@ -364,12 +378,12 @@ func (s *Server) serveConn(parent context.Context, c *websocket.Conn, role, cons
 					cancel()
 					return
 				}
-				out := s.Runtime.Invoke(ctx, q)
-				if s.Runtime.Channel.Snapshot().Account != snap.Account {
-					cancel()
-					return
-				}
-				if writer.json(out) != nil {
+				if s.Runtime.InvokeFrames(ctx, q, func(out Response) error {
+					if s.Runtime.Channel.Snapshot().Account != snap.Account {
+						return bot.ErrScope
+					}
+					return writer.json(out)
+				}) != nil {
 					cancel()
 				}
 			}(q)

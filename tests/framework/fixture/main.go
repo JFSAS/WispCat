@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"syscall"
@@ -164,7 +165,14 @@ func run() error {
 	for _, account := range []string{"synthetic-account-a", "synthetic-account-b"} {
 		channel := &synthetic{account: account, deliveries: map[string]bot.Delivery{}, keys: map[string]string{}}
 		channels = append(channels, channel)
-		servers = append(servers, onebot.NewServer(onebot.New(channel, state), fixtureToken, ""))
+		runtime := onebot.New(channel, state)
+		streams, e := onebot.OpenStreams(filepath.Join(*stateDir, "stream-"+account))
+		if e != nil {
+			return e
+		}
+		defer streams.Close()
+		runtime.Streams = streams
+		servers = append(servers, onebot.NewServer(runtime, fixtureToken, ""))
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

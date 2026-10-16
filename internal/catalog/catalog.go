@@ -11,10 +11,11 @@ import (
 var JSON []byte
 
 type Action struct {
-	Name     string          `json:"name"`
-	Summary  string          `json:"summary"`
-	ReadOnly bool            `json:"read_only"`
-	Schema   json.RawMessage `json:"input_schema"`
+	Name      string          `json:"name"`
+	Summary   string          `json:"summary"`
+	ReadOnly  bool            `json:"read_only"`
+	Schema    json.RawMessage `json:"input_schema"`
+	Streaming bool            `json:"streaming,omitempty"`
 }
 
 func Actions() []Action {

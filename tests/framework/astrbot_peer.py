@@ -24,6 +24,7 @@ from astrbot.core.config import VERSION
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_platform_adapter import AiocqhttpAdapter
 
 report = Path(os.environ['FRAMEWORK_REPORT'])
+from stream_probe import probe
 
 
 async def main():
@@ -50,11 +51,13 @@ async def main():
             status = await adapter.bot.get_status(self_id=message.self_id)
             assert int(login['user_id']) == int(message.self_id)
             assert status['online'] and status['good']
+            stream_verified = await probe(lambda action, **params: getattr(adapter.bot, action)(**params), message.self_id, message.message_id)
             chain = ([At(qq=event.get_sender_id())] if group else []) + [Plain(text='pong:' + text)]
             await event.send(MessageChain(chain))
             handled.append({'kind': 'group' if group else 'private',
                 'user_id': int(event.get_sender_id()), 'self_id': int(message.self_id),
                 'to_me': to_me, 'member_lookup_verified': group,
+                'stream_upload_verified': stream_verified,
                 'message_id': int(message.message_id)})
             report.write_text(json.dumps({'framework': 'astrbot',
                 'scope': 'actual platform adapter, message conversion and send; local consumer replaces app pipeline',

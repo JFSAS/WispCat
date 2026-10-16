@@ -72,6 +72,9 @@ func New(c Config) (*Host, error) {
 	h.token, _ = token(c.TokenEnv)
 	cleanup := func(err error) (*Host, error) {
 		for _, a := range h.accounts {
+			if a.adapter.Runtime.Streams != nil {
+				_ = a.adapter.Runtime.Streams.Close()
+			}
 			_ = a.bot.CloseHistory()
 			if a.bot.Archive != nil {
 				_ = a.bot.Archive.Close()
@@ -140,8 +143,16 @@ func New(c Config) (*Host, error) {
 		state := shared
 		secret, _ := token(a.TokenEnv)
 		adapter := onebot.NewServer(onebot.New(bot, state), secret, "")
+		streams, e := onebot.OpenStreams(filepath.Join(p.Directory, "stream-temp"))
+		if e != nil {
+			_ = history.Close()
+			_ = archive.Close()
+			return cleanup(e)
+		}
+		adapter.Runtime.Streams = streams
 		settings, e := openConnectionSettings(p.Directory, c, a)
 		if e != nil {
+			_ = streams.Close()
 			_ = history.Close()
 			_ = archive.Close()
 			return cleanup(e)
@@ -296,6 +307,11 @@ func (h *Host) shutdown() {
 	// process to start while old protocol work is still in flight.
 	h.wg.Wait()
 	for _, a := range h.accounts {
+		if a.adapter.Runtime.Streams != nil {
+			if err := a.adapter.Runtime.Streams.Close(); err != nil {
+				failures = append(failures, err)
+			}
+		}
 		if err := a.bot.CloseHistory(); err != nil {
 			failures = append(failures, err)
 		}
@@ -419,6 +435,13 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			reply(200, status)
+		case "streams":
+			status, err := a.adapter.Runtime.Streams.Snapshot("")
+			if err != nil {
+				reply(503, map[string]string{"error": "stream_storage_unavailable"})
+				return
+			}
+			reply(200, status)
 		default:
 			reply(404, map[string]string{"error": "not_found"})
 		}
@@ -465,6 +488,14 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	switch action {
+	case "streams/clean":
+		result, e := a.adapter.Runtime.Streams.Clean("")
+		if e != nil {
+			reply(503, map[string]string{"error": "stream_storage_unavailable"})
+			return
+		}
+		reply(200, result)
+		return
 	case "archive/compact":
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
@@ -503,6 +534,6 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 const managementPage = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>WeChat Runtime</title><style>body{max-width:960px;margin:40px auto;font:16px system-ui;background:#f6f7f9;color:#17212c}input,button{padding:10px;margin:5px}pre{background:white;padding:20px;white-space:pre-wrap}article{background:white;padding:20px;margin:15px 0;border-radius:8px}</style><h1>WeChat Runtime</h1><p>独立微信通道 · OneBot v11。Bot 和模型在外部进程运行。</p><input id="token" type="password" placeholder="管理令牌" autocomplete="off"><button id="refresh">刷新账号</button><main id="accounts"></main><script>
 const token=document.querySelector('#token'),out=document.querySelector('#accounts');
 async function call(path,method='GET'){const r=await fetch(path,{method,headers:{Authorization:'Bearer '+token.value,...(method==='POST'?{'Content-Type':'application/json'}:{})},...(method==='POST'?{body:'{}'}:{})});if(!r.ok)throw Error('HTTP '+r.status);return r.json()}
-async function refresh(){try{const rows=await call('/accounts');out.replaceChildren();for(const a of rows){const card=document.createElement('article'),title=document.createElement('h2'),pre=document.createElement('pre');title.textContent=a.name;pre.textContent=JSON.stringify(a,null,2);card.append(title,pre);for(const [name,action] of [['恢复缓存连接','online'],['离线','offline'],['申请二维码','login/start'],['取消扫码','login/cancel']]){const b=document.createElement('button');b.textContent=name;b.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/'+action,'POST');await refresh()}catch(e){alert(e.message)}};card.append(b)}const b=document.createElement('button');b.textContent='显示二维码';b.onclick=async()=>{try{const st=await call('/accounts/'+encodeURIComponent(a.name)+'/login');if(!st.image_ready)throw Error('二维码尚未就绪，请稍后刷新');const r=await fetch('/accounts/'+encodeURIComponent(a.name)+'/login/image?id='+encodeURIComponent(st.id),{headers:{Authorization:'Bearer '+token.value}});if(!r.ok)throw Error('二维码读取失败');const img=document.createElement('img'),url=URL.createObjectURL(await r.blob());img.width=240;img.onload=()=>URL.revokeObjectURL(url);img.src=url;card.append(img)}catch(e){alert(e.message)}};card.append(b);const archive=document.createElement('pre');archive.hidden=true;for(const [label,path,method] of [['投递归档状态','archive','GET'],['归档已完成投递','archive/compact','POST']]){const button=document.createElement('button');button.textContent=label;button.onclick=async()=>{try{const result=await call('/accounts/'+encodeURIComponent(a.name)+'/'+path,method);archive.textContent=JSON.stringify(result,null,2);archive.hidden=false}catch(e){alert(e.message)}};card.append(button)}card.append(archive);const editor=document.createElement('textarea');editor.rows=12;editor.style.width='95%';const info=document.createElement('p');let revision='';async function loadConnections(){const state=await call('/accounts/'+encodeURIComponent(a.name)+'/connections');revision=state.revision;editor.value=JSON.stringify(state.saved,null,2);info.textContent=state.applied?'连接配置已应用':'已保存连接配置尚未应用'}const save=document.createElement('button');save.textContent='保存连接配置';save.onclick=async()=>{try{const plan=JSON.parse(editor.value);const response=await fetch('/accounts/'+encodeURIComponent(a.name)+'/connections',{method:'POST',headers:{Authorization:'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({revision,plan})});if(!response.ok)throw Error('保存失败：HTTP '+response.status);await loadConnections()}catch(e){alert(e.message)}};const apply=document.createElement('button');apply.textContent='应用已保存连接';apply.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/connections/apply','POST');await loadConnections()}catch(e){alert(e.message)}};card.append(info,editor,save,apply);out.append(card);await loadConnections()}}catch(e){out.textContent=e.message}}
+async function refresh(){try{const rows=await call('/accounts');out.replaceChildren();for(const a of rows){const card=document.createElement('article'),title=document.createElement('h2'),pre=document.createElement('pre');title.textContent=a.name;pre.textContent=JSON.stringify(a,null,2);card.append(title,pre);for(const [name,action] of [['恢复缓存连接','online'],['离线','offline'],['申请二维码','login/start'],['取消扫码','login/cancel']]){const b=document.createElement('button');b.textContent=name;b.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/'+action,'POST');await refresh()}catch(e){alert(e.message)}};card.append(b)}const b=document.createElement('button');b.textContent='显示二维码';b.onclick=async()=>{try{const st=await call('/accounts/'+encodeURIComponent(a.name)+'/login');if(!st.image_ready)throw Error('二维码尚未就绪，请稍后刷新');const r=await fetch('/accounts/'+encodeURIComponent(a.name)+'/login/image?id='+encodeURIComponent(st.id),{headers:{Authorization:'Bearer '+token.value}});if(!r.ok)throw Error('二维码读取失败');const img=document.createElement('img'),url=URL.createObjectURL(await r.blob());img.width=240;img.onload=()=>URL.revokeObjectURL(url);img.src=url;card.append(img)}catch(e){alert(e.message)}};card.append(b);const archive=document.createElement('pre');archive.hidden=true;for(const [label,path,method] of [['投递归档状态','archive','GET'],['归档已完成投递','archive/compact','POST'],['临时传输状态','streams','GET'],['清理传输临时文件','streams/clean','POST']]){const button=document.createElement('button');button.textContent=label;button.onclick=async()=>{try{const result=await call('/accounts/'+encodeURIComponent(a.name)+'/'+path,method);archive.textContent=JSON.stringify(result,null,2);archive.hidden=false}catch(e){alert(e.message)}};card.append(button)}card.append(archive);const editor=document.createElement('textarea');editor.rows=12;editor.style.width='95%';const info=document.createElement('p');let revision='';async function loadConnections(){const state=await call('/accounts/'+encodeURIComponent(a.name)+'/connections');revision=state.revision;editor.value=JSON.stringify(state.saved,null,2);info.textContent=state.applied?'连接配置已应用':'已保存连接配置尚未应用'}const save=document.createElement('button');save.textContent='保存连接配置';save.onclick=async()=>{try{const plan=JSON.parse(editor.value);const response=await fetch('/accounts/'+encodeURIComponent(a.name)+'/connections',{method:'POST',headers:{Authorization:'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({revision,plan})});if(!response.ok)throw Error('保存失败：HTTP '+response.status);await loadConnections()}catch(e){alert(e.message)}};const apply=document.createElement('button');apply.textContent='应用已保存连接';apply.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/connections/apply','POST');await loadConnections()}catch(e){alert(e.message)}};card.append(info,editor,save,apply);out.append(card);await loadConnections()}}catch(e){out.textContent=e.message}}
 document.querySelector('#refresh').onclick=refresh;
 </script></html>`

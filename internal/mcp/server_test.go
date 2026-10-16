@@ -66,3 +66,32 @@ func TestMCPDocsAndWriteGate(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPStreamingActionsKeepExecutionAndTransportGates(t *testing.T) {
+	var calls atomic.Int32
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write([]byte(`{"status":"ok","retcode":0,"data":{}}`))
+	}))
+	defer peer.Close()
+	c, err := client.New(peer.URL, "synthetic-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Server{Mode: "write", Client: c}
+	for _, tc := range []struct {
+		tool, action string
+		calls        int32
+		failed       bool
+	}{
+		{"query_action", "upload_file_stream", 0, true}, {"query_action", "clean_stream_temp_file", 0, true},
+		{"invoke_action", "download_file_stream", 0, true}, {"invoke_action", "upload_file_stream", 1, false},
+	} {
+		raw, _ := json.Marshal(map[string]any{"name": tc.tool, "arguments": map[string]any{"action": tc.action, "params": map[string]any{}}})
+		before := calls.Load()
+		value, err := s.handle(context.Background(), request{Method: "tools/call", Params: raw})
+		if err != nil || value.(map[string]any)["isError"] != tc.failed || calls.Load()-before != tc.calls {
+			t.Fatal(tc.action, err, value, calls.Load()-before)
+		}
+	}
+}

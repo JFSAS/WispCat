@@ -25,6 +25,7 @@ type Response struct {
 	Data    json.RawMessage `json:"data"`
 	Message string          `json:"message,omitempty"`
 	Wording string          `json:"wording,omitempty"`
+	Stream  string          `json:"stream,omitempty"`
 }
 type ActionError struct{ Response Response }
 
@@ -42,32 +43,11 @@ func New(endpoint, token string) (*Client, error) {
 }
 func (c *Client) Call(ctx context.Context, action string, params any) (Response, error) {
 	var result Response
-	if action == "" || strings.ContainsAny(action, "/\\?#\r\n") {
-		return result, errors.New("invalid_action_name")
-	}
-	body, err := json.Marshal(params)
+	response, err := c.doAction(ctx, action, params)
 	if err != nil {
 		return result, err
-	}
-	if params == nil {
-		body = []byte("{}")
-	}
-	u := *c.base
-	u.Path += "/" + action
-	q, err := http.NewRequestWithContext(ctx, "POST", u.String(), bytes.NewReader(body))
-	if err != nil {
-		return result, err
-	}
-	q.Header.Set("Authorization", "Bearer "+c.token)
-	q.Header.Set("Content-Type", "application/json")
-	response, err := c.http.Do(q)
-	if err != nil {
-		return result, errors.New("onebot_transport_failed")
 	}
 	defer response.Body.Close()
-	if response.StatusCode != 200 {
-		return result, errors.New("onebot_http_failed")
-	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (24<<20)+1))
 	if err != nil || len(raw) > 24<<20 || json.Unmarshal(raw, &result) != nil {
 		return result, errors.New("invalid_onebot_response")
@@ -76,4 +56,33 @@ func (c *Client) Call(ctx context.Context, action string, params any) (Response,
 		return result, &ActionError{Response: result}
 	}
 	return result, nil
+}
+func (c *Client) doAction(ctx context.Context, action string, params any) (*http.Response, error) {
+	if action == "" || strings.ContainsAny(action, "/\\?#\r\n") {
+		return nil, errors.New("invalid_action_name")
+	}
+	body, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	if params == nil {
+		body = []byte("{}")
+	}
+	u := *c.base
+	u.Path += "/" + action
+	q, err := http.NewRequestWithContext(ctx, "POST", u.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	q.Header.Set("Authorization", "Bearer "+c.token)
+	q.Header.Set("Content-Type", "application/json")
+	response, err := c.http.Do(q)
+	if err != nil {
+		return nil, errors.New("onebot_transport_failed")
+	}
+	if response.StatusCode != 200 {
+		_ = response.Body.Close()
+		return nil, errors.New("onebot_http_failed")
+	}
+	return response, nil
 }

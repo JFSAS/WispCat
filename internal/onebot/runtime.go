@@ -24,18 +24,21 @@ type Response struct {
 	Message string          `json:"message,omitempty"`
 	Wording string          `json:"wording,omitempty"`
 	Echo    json.RawMessage `json:"echo,omitempty"`
+	Stream  string          `json:"stream,omitempty"`
 }
 type Action struct {
-	Name     string         `json:"name"`
-	Summary  string         `json:"summary"`
-	ReadOnly bool           `json:"read_only"`
-	Schema   map[string]any `json:"input_schema"`
+	Name      string         `json:"name"`
+	Summary   string         `json:"summary"`
+	ReadOnly  bool           `json:"read_only"`
+	Schema    map[string]any `json:"input_schema"`
+	Streaming bool           `json:"streaming,omitempty"`
 }
 type Runtime struct {
 	Channel       bot.Channel
 	State         *State
 	ActionTimeout time.Duration
 	MediaURL      func(string, string, string) string
+	Streams       *Streams
 }
 
 func New(channel bot.Channel, state *State) *Runtime {
@@ -99,9 +102,9 @@ func (r *Runtime) Actions() []Action {
 		if len(v.required) > 0 {
 			schema["required"] = v.required
 		}
-		items = append(items, Action{v.name, v.summary, v.read, schema})
+		items = append(items, Action{Name: v.name, Summary: v.summary, ReadOnly: v.read, Schema: schema})
 	}
-	return items
+	return append(items, streamActions()...)
 }
 func (r *Runtime) known(action string) bool {
 	for _, a := range r.Actions() {
@@ -118,11 +121,9 @@ func (r *Runtime) Invoke(ctx context.Context, q Request) Response {
 	}
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
-	out := r.invoke(ctx, q)
-	out.Echo = q.Echo
-	return out
+	return streamEnvelope(q, r.invoke(ctx, q, nil))
 }
-func (r *Runtime) invoke(ctx context.Context, q Request) Response {
+func (r *Runtime) invoke(ctx context.Context, q Request, sink func(any) error) Response {
 	if !r.known(q.Action) {
 		return fail(1404, "action_not_supported")
 	}
@@ -158,7 +159,7 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		return good(map[string]any{"online": snap.Online, "good": snap.Online, "wechat_state": snap.State})
 	}
 	if q.Action == "wechat_get_capabilities" {
-		return good(map[string]any{"platform": "wechat", "actions": r.Actions(), "segments": []string{"text", "at", "image", "file"}, "media_input": "base64 or HTTP(S); up to 20 ordered native messages, 16MiB total media", "member_list_complete": false, "event_acknowledgement": false, "unsupported": []string{"reply segment", "recall", "voice send", "group administration", "friend approval"}})
+		return good(map[string]any{"platform": "wechat", "actions": r.Actions(), "segments": []string{"text", "at", "image", "file"}, "media_input": "base64, HTTP(S), or scoped stream:// reference; up to 20 ordered native messages, 16MiB total media", "stream_storage_enabled": r.Streams != nil, "stream_max_file_bytes": streamFileLimit, "stream_max_chunk_bytes": streamChunkLimit, "member_list_complete": false, "event_acknowledgement": false, "unsupported": []string{"reply segment", "recall", "voice send", "group administration", "friend approval"}})
 	}
 	if q.Action == "can_send_image" {
 		return good(map[string]bool{"yes": true})
@@ -174,6 +175,9 @@ func (r *Runtime) invoke(ctx context.Context, q Request) Response {
 		if err != nil {
 			return fail(1500, "state_unavailable")
 		}
+	}
+	if streamAction(q.Action) || q.Action == "clean_stream_temp_file" {
+		return r.invokeStream(ctx, q, snap, sink)
 	}
 	switch q.Action {
 	case "get_group_member_info":

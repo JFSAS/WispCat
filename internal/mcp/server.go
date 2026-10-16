@@ -129,6 +129,9 @@ func (s *Server) handle(ctx context.Context, q request) (any, error) {
 			if !ok {
 				return content("action_unavailable", true), nil
 			}
+			if a.Streaming && a.Name != "upload_file_stream" {
+				return content("stream_transport_required: use the Go SDK Stream method or OneBot HTTP/WebSocket", true), nil
+			}
 			if p.Name == "query_action" && !a.ReadOnly {
 				return content("write_action_requires_invoke", true), nil
 			}
