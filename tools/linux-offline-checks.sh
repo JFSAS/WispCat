@@ -9,6 +9,7 @@ sh tools/require-loopback-network.sh
 python3 tools/check_baseline.py
 python3 tools/test-baseline-checker.py
 python3 tools/test-offline-evidence.py
+python3 tools/test-container-probes.py
 ip -brief address
 ip route show
 go version
