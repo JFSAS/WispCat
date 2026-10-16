@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"image/png"
 	"os"
 	"strings"
 	"testing"
@@ -46,9 +47,10 @@ func deploymentMediaService(t *testing.T, directory string) (BotAdapter, *Deploy
 }
 
 func TestDeploymentMediaWorkersPreserveBytesEncodeAndReopen(t *testing.T) {
-	for _, kind := range []string{"image", "file"} {
+	for _, kind := range []string{"image", "file", "large_image", "large_file"} {
 		for _, conversation := range []string{"private", "group"} {
 			t.Run(kind+"/"+conversation, func(t *testing.T) {
+				baseKind := strings.TrimPrefix(kind, "large_")
 				root := t.TempDir()
 				a, d, closeFirst := deploymentMediaService(t, root)
 				if err := d.InjectMedia(conversation, kind); err != nil {
@@ -64,7 +66,7 @@ func TestDeploymentMediaWorkersPreserveBytesEncodeAndReopen(t *testing.T) {
 				event := events[0]
 				reference := ""
 				for _, part := range event.Message {
-					if part.Type == kind {
+					if part.Type == baseKind {
 						reference = part.Data["file"]
 					}
 				}
@@ -73,14 +75,18 @@ func TestDeploymentMediaWorkersPreserveBytesEncodeAndReopen(t *testing.T) {
 					closeFirst()
 					t.Fatal(err)
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				budget := 5 * time.Second
+				if baseKind != kind {
+					budget = 15 * time.Second
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), budget)
 				defer cancel()
 				content, err := a.Download(ctx, snap.Account, event.Conversation.ID, reference)
 				if err != nil || !bytes.Equal(content.Data, body) {
 					closeFirst()
 					t.Fatal("native download bytes", err)
 				}
-				result, err := a.Submit(ctx, bot.Send{Account: snap.Account, Epoch: snap.Epoch, Conversation: event.Conversation.ID, Key: "deployment-media-reply", Upload: &bot.Upload{Kind: kind, Name: name, Data: body}})
+				result, err := a.Submit(ctx, bot.Send{Account: snap.Account, Epoch: snap.Epoch, Conversation: event.Conversation.ID, Key: "deployment-media-reply", Upload: &bot.Upload{Kind: baseKind, Name: name, Data: body}})
 				if err != nil {
 					closeFirst()
 					t.Fatal(err)
@@ -96,7 +102,7 @@ func TestDeploymentMediaWorkersPreserveBytesEncodeAndReopen(t *testing.T) {
 					t.Fatal("native media fixture did not settle", state.Error, len(state.Sends), state.Uploads, state.Downloads)
 				}
 				row := state.Sends[0]
-				if row.ID != result.ID || row.Media != kind || row.Kind != conversation || row.PayloadSHA != hex.EncodeToString(sum[:]) || row.EncodedBytes == 0 || len(row.EncodedSHA) != 64 {
+				if row.ID != result.ID || row.Media != baseKind || row.Kind != conversation || row.PayloadSHA != hex.EncodeToString(sum[:]) || row.EncodedBytes == 0 || len(row.EncodedSHA) != 64 {
 					closeFirst()
 					t.Fatal("media/codec observation mismatch")
 				}
@@ -146,5 +152,29 @@ func TestDeploymentMediaDownloaderRejectsUnregisteredDescriptor(t *testing.T) {
 	}
 	if d.Inspect().Downloads != 0 {
 		t.Fatal("unknown fixture reference was resolved")
+	}
+}
+
+func TestDeploymentLargeMediaCorpusPreservesValidPNGAndBoundedSize(t *testing.T) {
+	corpus, err := deploymentMediaData()
+	if err != nil || corpus.LargeBytes != (8<<20)+37 {
+		t.Fatal("large corpus size changed", err)
+	}
+	for _, kind := range []string{"large_image", "large_file"} {
+		first, _, err := deploymentMediaPayload(kind, "synthetic-a")
+		second, _, otherErr := deploymentMediaPayload(kind, "synthetic-b")
+		if err != nil || otherErr != nil || len(first) != corpus.LargeBytes || len(second) != len(first) || bytes.Equal(first, second) {
+			t.Fatal("large corpus scope or size mismatch", kind, err, otherErr)
+		}
+		if kind == "large_image" {
+			config, err := png.DecodeConfig(bytes.NewReader(first))
+			if err != nil || config.Width != 2 || config.Height != 2 {
+				t.Fatal("large PNG is invalid", err)
+			}
+			main, thumb, _, _, _, _, err := prepareImageUpload(first)
+			if err != nil || len(main) == 0 || len(thumb) == 0 {
+				t.Fatal("original image preparation rejected large PNG", err)
+			}
+		}
 	}
 }

@@ -7,7 +7,7 @@ python="${DEPLOYMENT_PYTHON:-.bin/deployment-env/bin/python}"
 test -x "$python" || { echo 'Prepare the isolated deployment environment first.' >&2; exit 1; }
 mkdir -p .bin
 deployment_scenario=text
-if [ "${1:-}" = --media ]; then deployment_scenario=media; shift; fi
+case "${1:-}" in --media) deployment_scenario=media; shift ;; --large-media) deployment_scenario=large-media; shift ;; esac
 deployment_source_sha="$("$python" tests/deployment/source_capture.py)"
 sh tools/go.sh build -race -tags integrationfixtures -trimpath -ldflags "-X main.deploymentSourceSHA=$deployment_source_sha" -o .bin/deployment-fixture ./tests/deployment/fixture
 "$python" tests/deployment/source_capture.py --check

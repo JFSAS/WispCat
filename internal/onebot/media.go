@@ -90,6 +90,7 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request) {
 	stop := context.AfterFunc(s.shutdown, cancel)
 	defer stop()
 	content, err := s.Runtime.Channel.Download(ctx, q.Get("account"), q.Get("conversation"), q.Get("file"))
+	cancel()
 	if err != nil {
 		if errors.Is(err, bot.ErrStorage) {
 			http.Error(w, "runtime_storage_unavailable", 503)
@@ -102,6 +103,11 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "media_limit", 413)
 		return
 	}
+	writeBudget, err := s.beginHTTPWrite(r.Context(), w)
+	if err != nil {
+		return
+	}
+	defer writeBudget.close()
 	w.Header().Set("Content-Type", content.MIME)
 	w.Header().Set("Content-Length", strconv.Itoa(len(content.Data)))
 	_, _ = w.Write(content.Data)

@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 from offline_api import request_json
 from source_capture import load_checked, freeze
-from media_probe import payload,fetch,local_media_url
+from media_probe import payload,fetch,local_media_url,CORPUS,abandon
 
 ADMIN = 'synthetic-deployment-admin-token'
 BOT = 'synthetic-deployment-onebot-token'
@@ -45,14 +45,16 @@ def wait_for(callback, processes, timeout=30):
 
 
 def run(framework,scenario='text'):
-    assert framework in ('nonebot', 'astrbot','astrbot-application') and scenario in ('text','media')
+    assert framework in ('nonebot', 'astrbot','astrbot-application') and scenario in ('text','media','large-media')
     application=framework=='astrbot-application'
-    media_kinds=['text','image','file'] if scenario=='media' else ['text']
+    large=scenario=='large-media'
+    os.environ['DEPLOYMENT_MEDIA_PROFILE']='large' if large else 'small'
+    media_kinds=['text','image','file'] if scenario!='text' else ['text']
     cases=[(kind,media) for media in media_kinds for kind in ['private','group']]
     per_account=len(cases)
     per_round=per_account*len(ACCOUNTS)
     source, source_sha = load_checked()
-    output = ROOT/('.bin/deployment-application-results' if application else '.bin/deployment-media-results' if scenario=='media' else '.bin/deployment-results')/(framework+'.json')
+    output = ROOT/('.bin/deployment-large-results' if large else '.bin/deployment-application-results' if application else '.bin/deployment-media-results' if scenario=='media' else '.bin/deployment-results')/(framework+'.json')
     output.parent.mkdir(exist_ok=True)
     output.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix='wechat-deployment-') as directory:
@@ -68,7 +70,7 @@ def run(framework,scenario='text'):
             port = reserve.getsockname()[1]
         peer_report = temp / 'peer.json'
         env = {'PATH': os.environ['PATH'], 'HOME': str(temp), 'PYTHONNOUSERSITE': '1',
-            'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONUNBUFFERED': '1',
+            'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONUNBUFFERED': '1', 'DEPLOYMENT_MEDIA_PROFILE':'large' if large else 'small',
             'FRAMEWORK_PORT': str(port), 'FRAMEWORK_REPORT': str(peer_report),
             'ASTRBOT_ROOT': str(temp), 'ASTRBOT_DISABLE_METRICS': '1',
             'DEPLOYMENT_ADMIN_TOKEN': ADMIN, 'DEPLOYMENT_BOT_TOKEN': BOT,
@@ -165,7 +167,7 @@ def run(framework,scenario='text'):
                 for name in ACCOUNTS:
                     for kind,media in cases:
                         value={'account':name,'kind':kind,'text':'/'+kind+'-ping','mentioned':kind=='group'}
-                        if media!='text':value['media']=media
+                        if media!='text':value['media']=('large_' if large else '')+media
                         request_json(points['control']+'/fixture/inject',CONTROL,'POST',value)
                         handled_count+=1
                         wait_for(lambda: peer_report.exists() and len(json.loads(peer_report.read_text())['handled'])==handled_count,processes)
@@ -239,6 +241,24 @@ def run(framework,scenario='text'):
                 for item in initial[i*per_account:(i+1)*per_account]:
                     if item.get('media'):
                         old_media.append({'account':name,'media':item['media'],'file_id':item['received_file_id'],'message_id':item['received_message_id']})
+            interrupted_http_reads=[]
+            if large:
+                # Exercise client-side interruption after native caching has
+                # completed. This is not a killed framework/CDN worker test.
+                row=next(item for item in accounts() if item['name']==ACCOUNTS[0])
+                records=[next(item for item in old_media if item['account']==ACCOUNTS[0] and item['media']==kind) for kind in ['image','file']]
+                before_downloads=inspect(ACCOUNTS[0])['synthetic_downloads']
+                for record in records:
+                    result=request_json('http://'+row['onebot_address']+'/get_msg',BOT,'POST',{'message_id':record['message_id']})
+                    part=next(item for item in result['data']['message'] if item['type']==record['media'])
+                    url=part['data']['url'];prefixes=[]
+                    for _ in range(16):
+                        prefixes.append(asyncio.run(abandon(url)))
+                    complete=asyncio.run(fetch(url));assert complete==payload(record['media'],ACCOUNTS[0])
+                    status=request_json('http://'+row['onebot_address']+'/get_status',BOT)
+                    assert status['retcode']==0 and status['data']['good']
+                    assert inspect(ACCOUNTS[0])['synthetic_downloads']==before_downloads
+                    interrupted_http_reads.append({'media':record['media'],'aborted_reads':len(prefixes),'prefix_bytes':prefixes,'complete_retry_bytes':len(complete),'sha256':hashlib.sha256(complete).hexdigest(),'extra_cdn_downloads':0})
             # Stop the actual host process. A zero exit requires account workers,
             # requests, reverse transports, archives and shared index to join.
             stop(host_process)
@@ -296,6 +316,8 @@ def run(framework,scenario='text'):
             after_membership = exercise('account_reenable', per_round)
             for first, after in zip(initial, after_membership):
                 assert (first['self_id'], first['user_id']) == (after['self_id'], after['user_id'])
+            final_incoming_cache={name:admin('/accounts/'+name+'/media-cache') for name in ACCOUNTS}
+            assert all(row['active_native_tasks']==0 for row in final_incoming_cache.values())
             change_connections(False)
             final_peer = stop(peer, peer_kind=framework)
             stop(host_process)
@@ -304,7 +326,7 @@ def run(framework,scenario='text'):
             result = {'result': 'pass', 'framework': framework, 'framework_versions': json.loads(peer_report.read_text())['versions'],
                 'scope': 'Separate actual Host/Service/OneBot/storage/management process and actual framework process; synthetic native ingestion and terminal receipts; no native protocol session loop',
                 'framework_application_lifecycle': framework == 'nonebot' or application, 'astrbot_full_application_started': application,
-                'observations': observations, 'old_messages_stable_after_host_reopen': True,
+                'observations': observations, 'old_messages_stable_after_host_reopen': True, 'interrupted_http_reads':interrupted_http_reads, 'final_incoming_cache':final_incoming_cache,
                 'old_media_references_cached_after_host_and_account_reopen':bool(old_media),
                 'downloads_before_new_injection_after_host_reopen':host_reopen_downloads,
                 'downloads_before_account_stop':{'synthetic-b':sibling_downloads},
@@ -312,7 +334,7 @@ def run(framework,scenario='text'):
                 'cross_account_signed_media_denied':bool(old_media),
                 'account_stop_reenable_preserved_ids': True, 'retained_sibling_worker_and_port': True,
                 'host_process_starts': starts['host'], 'framework_process_starts': starts['peer'],
-                'synthetic_replies':per_round*4, 'scenario':scenario, 'synthetic_media_replies':(per_round-4)*4, 'graceful_host_shutdowns': 2,
+                'synthetic_replies':per_round*4, 'scenario':scenario, 'large_media_payload_bytes':CORPUS['large_payload_bytes'] if large else 0, 'synthetic_media_replies':(per_round-4)*4, 'graceful_host_shutdowns': 2,
                 'nonebot_shutdown_hooks': [first_peer, final_peer] if framework == 'nonebot' else [],
                 'astrbot_adapter_shutdowns': [first_peer,final_peer] if framework in ('astrbot','astrbot-application') else [],
                 'astrbot_application_shutdowns':[first_peer,final_peer] if application else [],
@@ -328,7 +350,7 @@ def run(framework,scenario='text'):
                     'AstrBot application uses actual InitialLoader/Core/plugin/pipeline/SQLite with providers and dashboard listener disabled; metadata endpoint points to owned loopback' if application else 'AstrBot uses its real adapter and local consumer; no full application in this scenario',
                     'CDN/profile discovery and platform exchanges are synthetic; native media workers/preparation/body encoders are exercised locally']}
             output.write_text(json.dumps(result, indent=2) + '\n')
-            print(json.dumps({'result': 'pass', 'framework': framework, 'synthetic_replies':per_round*4, 'scenario':scenario, 'synthetic_media_replies':(per_round-4)*4, 'host_starts': 2, 'framework_starts': 2}))
+            print(json.dumps({'result': 'pass', 'framework': framework, 'synthetic_replies':per_round*4, 'scenario':scenario, 'large_media_payload_bytes':CORPUS['large_payload_bytes'] if large else 0, 'synthetic_media_replies':(per_round-4)*4, 'host_starts': 2, 'framework_starts': 2}))
         except Exception:
             for log in logs:
                 log.flush(); log.seek(0); sys.stderr.write(log.read()[-10000:])

@@ -215,6 +215,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond := func(status int, value any) {
+		writeBudget, err := s.beginHTTPWrite(r.Context(), w)
+		if err != nil {
+			return
+		}
+		defer writeBudget.close()
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(value)
@@ -291,11 +296,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer stop()
 	if streamAction(q.Action) {
 		controller := http.NewResponseController(w)
-		defer func() { _ = controller.SetWriteDeadline(time.Time{}) }()
+		writeBudget, err := s.beginHTTPWrite(ctx, w)
+		if err != nil {
+			return
+		}
+		defer writeBudget.close()
 		w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
 		w.WriteHeader(200)
 		_ = s.Runtime.InvokeFrames(ctx, q, func(out Response) error {
-			_ = controller.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if err := writeBudget.renew(); err != nil {
+				return err
+			}
 			if err := json.NewEncoder(w).Encode(out); err != nil {
 				return err
 			}

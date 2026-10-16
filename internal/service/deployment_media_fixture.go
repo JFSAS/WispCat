@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ type deploymentMediaFixture struct {
 	Image        string `json:"image_base64"`
 	FileTemplate string `json:"file_template"`
 	FileName     string `json:"file_name"`
+	LargeBytes   int    `json:"large_payload_bytes"`
 }
 
 var deploymentMediaData = sync.OnceValues(func() (deploymentMediaFixture, error) {
@@ -45,15 +47,43 @@ func deploymentMediaPayload(kind, label string) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	switch kind {
+	baseKind, large := strings.CutPrefix(kind, "large_")
+	if large && (value.LargeBytes < 1<<20 || value.LargeBytes > 16<<20) {
+		return nil, "", errors.New("invalid_deployment_large_media_size")
+	}
+	switch baseKind {
 	case "image":
 		body, err := base64.StdEncoding.DecodeString(value.Image)
+		if err == nil && large {
+			if len(body) < 12 || !bytes.Equal(body[len(body)-8:], []byte{'I', 'E', 'N', 'D', 0xae, 0x42, 0x60, 0x82}) || value.LargeBytes < len(body)+12 {
+				return nil, "", errors.New("invalid_deployment_png_padding")
+			}
+			padding := deploymentRepeat([]byte("synthetic-image-padding/"+label), value.LargeBytes-len(body)-12)
+			chunk := make([]byte, 8, 8+len(padding)+4)
+			binary.BigEndian.PutUint32(chunk[:4], uint32(len(padding)))
+			copy(chunk[4:], "npAd")
+			chunk = append(chunk, padding...)
+			checksum := crc32.ChecksumIEEE(chunk[4:])
+			chunk = binary.BigEndian.AppendUint32(chunk, checksum)
+			body = append(append(append([]byte(nil), body[:len(body)-12]...), chunk...), body[len(body)-12:]...)
+		}
 		return body, "fixture.png", err
 	case "file":
-		return []byte(strings.ReplaceAll(value.FileTemplate, "{account}", label)), value.FileName, nil
+		body := []byte(strings.ReplaceAll(value.FileTemplate, "{account}", label))
+		if large {
+			if len(body) == 0 {
+				return nil, "", errors.New("invalid_deployment_file_template")
+			}
+			body = deploymentRepeat(body, value.LargeBytes)
+		}
+		return body, value.FileName, nil
 	default:
 		return nil, "", errors.New("invalid_deployment_media_kind")
 	}
+}
+
+func deploymentRepeat(seed []byte, size int) []byte {
+	return bytes.Repeat(seed, (size+len(seed)-1)/len(seed))[:size]
 }
 
 func (d *DeploymentDriver) downloadMedia(ctx context.Context, request MediaDownloadRequest) (*cdn.Result, error) {
@@ -61,14 +91,20 @@ func (d *DeploymentDriver) downloadMedia(ctx context.Context, request MediaDownl
 		return nil, err
 	}
 	kind := string(request.Description.Public().Kind)
-	body, _, err := deploymentMediaPayload(kind, d.label)
+	ref := request.Description.DownloadReference()
+	registered := kind
+	if ref.CDNID(request.Variant) == "fixture-large_"+kind+"-"+d.label {
+		registered = "large_" + kind
+	} else if ref.CDNID(request.Variant) != "fixture-"+kind+"-"+d.label {
+		return nil, errors.New("deployment_media_reference_not_registered")
+	}
+	body, _, err := deploymentMediaPayload(registered, d.label)
 	if err != nil {
 		return nil, err
 	}
-	ref := request.Description.DownloadReference()
-	wanted := "fixture-" + kind + "-" + d.label
+	wanted := "fixture-" + registered + "-" + d.label
 	size, known := ref.SizeBytes(request.Variant)
-	if ref.CDNID(request.Variant) != wanted || !known || size != uint64(len(body)) || ref.MD5() != fmt.Sprintf("%x", md5.Sum(body)) {
+	if ref.CDNID(request.Variant) != wanted || !known || size != uint64(len(body)) || ref.MD5() != fmt.Sprintf("%x", md5.Sum(body)) || request.MaxBytes > 0 && int64(len(body)) > request.MaxBytes {
 		return nil, errors.New("deployment_media_reference_not_registered")
 	}
 	d.mu.Lock()
@@ -84,7 +120,12 @@ func (d *DeploymentDriver) sendMedia(ctx context.Context, request MediaSendReque
 	if err := ctx.Err(); err != nil {
 		return MediaSendResult{}, err
 	}
-	expected, _, err := deploymentMediaPayload(request.Kind, d.label)
+	registered := request.Kind
+	corpus, corpusErr := deploymentMediaData()
+	if corpusErr == nil && len(request.Data) == corpus.LargeBytes {
+		registered = "large_" + registered
+	}
+	expected, _, err := deploymentMediaPayload(registered, d.label)
 	if err != nil || !bytes.Equal(request.Data, expected) {
 		return MediaSendResult{}, errors.New("deployment_media_payload_not_registered")
 	}
@@ -157,7 +198,7 @@ func (d *DeploymentDriver) InjectMedia(kind, mediaKind string) error {
 	}
 	ref := "fixture-" + mediaKind + "-" + d.label
 	message := protocol.Message{Type: 3}
-	if mediaKind == "image" {
+	if strings.TrimPrefix(mediaKind, "large_") == "image" {
 		message.Content = []byte(fmt.Sprintf(`<msg><img aeskey="00112233445566778899aabbccddeeff" cdnmidimgurl="%s" length="%d" md5="%x"/></msg>`, ref, len(body), md5.Sum(body)))
 	} else {
 		message.Type = 49
