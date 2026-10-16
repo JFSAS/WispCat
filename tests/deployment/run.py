@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / 'tools'))
 from offline_api import request_json
 from source_capture import load_checked, freeze
 from media_probe import payload,fetch,local_media_url,CORPUS,abandon
+from crash_source import StalledSource,cancellation_window
 
 ADMIN = 'synthetic-deployment-admin-token'
 BOT = 'synthetic-deployment-onebot-token'
@@ -45,16 +46,18 @@ def wait_for(callback, processes, timeout=30):
 
 
 def run(framework,scenario='text'):
-    assert framework in ('nonebot', 'astrbot','astrbot-application') and scenario in ('text','media','large-media')
+    assert framework in ('nonebot', 'astrbot','astrbot-application') and scenario in ('text','media','large-media','crash-media')
     application=framework=='astrbot-application'
-    large=scenario=='large-media'
+    crash=scenario=='crash-media'
+    assert not crash or framework in ('nonebot','astrbot-application')
+    large=scenario in ('large-media','crash-media')
     os.environ['DEPLOYMENT_MEDIA_PROFILE']='large' if large else 'small'
     media_kinds=['text','image','file'] if scenario!='text' else ['text']
     cases=[(kind,media) for media in media_kinds for kind in ['private','group']]
     per_account=len(cases)
     per_round=per_account*len(ACCOUNTS)
     source, source_sha = load_checked()
-    output = ROOT/('.bin/deployment-large-results' if large else '.bin/deployment-application-results' if application else '.bin/deployment-media-results' if scenario=='media' else '.bin/deployment-results')/(framework+'.json')
+    output = ROOT/('.bin/deployment-crash-results' if crash else '.bin/deployment-large-results' if large else '.bin/deployment-application-results' if application else '.bin/deployment-media-results' if scenario=='media' else '.bin/deployment-results')/(framework+'.json')
     output.parent.mkdir(exist_ok=True)
     output.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix='wechat-deployment-') as directory:
@@ -84,6 +87,7 @@ def run(framework,scenario='text'):
         websocket = f'ws://127.0.0.1:{port}' + ('/onebot/v11/ws' if framework == 'nonebot' else '/ws')
         processes, logs, observations = [], [], []
         starts = {'peer': 0, 'host': 0}
+        stalled = None
 
         def start(kind):
             starts[kind] += 1
@@ -117,6 +121,9 @@ def run(framework,scenario='text'):
             assert process.returncode == 0, process.returncode
 
         try:
+            if crash:
+                stalled = StalledSource()
+                env['DEPLOYMENT_CRASH_SOURCE'] = stalled.url
             peer, _ = start('peer')
             def listening():
                 with socket.create_connection(('127.0.0.1', port), timeout=.2):
@@ -276,16 +283,71 @@ def run(framework,scenario='text'):
                 row = next(row for row in restarted_accounts if row['name'] == old['account'])
                 reply = request_json('http://' + row['onebot_address'] + '/get_msg', BOT, 'POST', {'message_id': old['id']})
                 assert reply['retcode'] == 0 and reply['data'] == old['data'], reply
-            # Close managed connections before stopping the actual framework so
-            # a graceful lifecycle is tested, with no SIGKILL success fallback.
-            change_connections(False)
-            first_peer = stop(peer, peer_kind=framework)
-            peer_report.unlink()
-            peer, _ = start('peer')
-            wait_for(listening, processes)
-            change_connections(True)
-            wait_for(connected, processes)
-            after_peer = exercise('framework_reopen', 0)
+            crash_recovery = None
+            first_peer = None
+            if crash:
+                # A real action reads an incomplete source before Submit.
+                # Killing the framework must cancel that read, not enqueue or
+                # retry a send. Native CDN/receipt ambiguity is a separate case.
+                before_rows = {row['name']: row for row in accounts()}
+                before_drivers = {name: inspect(name) for name in ACCOUNTS}
+                def deliveries():
+                    return {name: sorted(admin('/accounts/'+name+'/deliveries'),key=lambda row:row['id']) for name in ACCOUNTS}
+                before_jobs = deliveries()
+                command_at = time.monotonic()
+                request_json(points['control']+'/fixture/inject',CONTROL,'POST',{'account':ACCOUNTS[0],'kind':'private','text':'/crash-transfer','mentioned':False})
+                wait_for(lambda: stalled.entered.is_set() and peer_report.exists() and 'crash_attempt' in json.loads(peer_report.read_text()),processes)
+                target = admin('/accounts/'+ACCOUNTS[0]+'/history')['cursor']
+                wait_for(lambda:next(row for row in accounts() if row['name']==ACCOUNTS[0])['connections'][0].get('cursor',0)>=target,processes)
+                assert len(stalled.requests)==1 and stalled.requests[0]['user_agent']=='Go-http-client/1.1',stalled.requests
+                assert not stalled.closed.is_set(), 'source read ended before the deliberate crash'
+                interrupted_peer = json.loads(peer_report.read_text())
+                attempted = interrupted_peer['crash_attempt']
+                assert (attempted['self_id'],attempted['user_id'])==(initial[0]['self_id'],initial[0]['user_id'])
+                kill_at = time.monotonic()
+                timing = cancellation_window(command_at,stalled.entered_at,kill_at)
+                peer.kill()
+                peer.wait(timeout=5)
+                assert peer.returncode == -signal.SIGKILL,peer.returncode
+                processes.remove(peer)
+                assert stalled.closed.wait(timeout=2),'framework crash left the runtime source request blocked'
+                cancel_millis = int((stalled.closed_at-kill_at)*1000)
+                assert 0 <= cancel_millis < 2000,cancel_millis
+                disconnected = wait_for(lambda:accounts() if all(row['connections'][0]['state']=='reconnecting' and row['connections'][0]['reconnects']>=1 for row in accounts()) else None,processes)
+                assert deliveries()==before_jobs,'incomplete source created or changed a native delivery'
+                for row in disconnected:
+                    name=row['name'];assert row['onebot_address']==before_rows[name]['onebot_address']
+                    assert inspect(name)==before_drivers[name],'crash changed native owner or send/download/upload facts'
+                    status=request_json('http://'+row['onebot_address']+'/get_status',BOT)
+                    assert status['retcode']==0 and status['data']['good']
+                old_message=request_json('http://'+before_rows[ACCOUNTS[0]]['onebot_address']+'/get_msg',BOT,'POST',{'message_id':attempted['received_message_id']})
+                assert old_message['retcode']==0 and old_message['data']['raw_message']=='/crash-transfer'
+                peer_report.unlink()
+                peer,_=start('peer')
+                wait_for(listening,processes)
+                # Keep the saved/applied connection plan: recovery must use
+                # ordinary reverse reconnect, without a management apply.
+                recovered=wait_for(connected,processes)
+                assert all(row['connections'][0]['reconnects']>=1 for row in recovered)
+                assert all(row['onebot_address']==before_rows[row['name']]['onebot_address'] for row in recovered)
+                assert deliveries()==before_jobs
+                crash_recovery={'signal':'SIGKILL','exit_code':-signal.SIGKILL,'interrupted_stage':'runtime outbound source fetch before Submit','source_declared_bytes':stalled.declared_bytes,'source_sent_bytes':1,'source_requests':list(stalled.requests),'source_cancel_millis':cancel_millis,
+                    'cancellation_causality_window':timing,
+                    'native_deliveries_unchanged_before_reconnect':True,'native_owner_generation_and_ports_retained':True,'management_and_onebot_remained_responsive':True,'automatic_reverse_reconnect':True,'automatic_source_retries':0,'transport_cursor_committed_before_crash':target,'interrupted_message_still_queryable':True,
+                    'interrupted_peer_report':interrupted_peer,'reconnecting_accounts':disconnected,'recovered_accounts':recovered}
+            else:
+                # Graceful variant closes managed connections before SIGTERM.
+                change_connections(False)
+                first_peer = stop(peer, peer_kind=framework)
+                peer_report.unlink()
+                peer, _ = start('peer')
+                wait_for(listening, processes)
+                change_connections(True)
+                wait_for(connected, processes)
+            after_peer = exercise('framework_crash_reopen' if crash else 'framework_reopen', 0)
+            if crash:
+                assert 'crash_attempt' not in json.loads(peer_report.read_text()),'transport cursor replayed the interrupted command'
+                assert len(stalled.requests)==1,'interrupted source was automatically retried'
             for first, after in zip(initial, after_peer):
                 assert (first['self_id'], first['user_id']) == (after['self_id'], after['user_id'])
             # Remove/re-add one production account owner while retaining its
@@ -321,6 +383,12 @@ def run(framework,scenario='text'):
             change_connections(False)
             final_peer = stop(peer, peer_kind=framework)
             stop(host_process)
+            assert not processes, 'successful deployment left children for fallback cleanup'
+            if stalled is not None:
+                assert len(stalled.requests)==1 and stalled.closed.is_set()
+                stalled.close()
+                stalled=None
+                crash_recovery['source_server_joined']=True
             assert hashlib.sha256(binary.read_bytes()).hexdigest() == binary_sha
             assert load_checked()[1] == source_sha
             result = {'result': 'pass', 'framework': framework, 'framework_versions': json.loads(peer_report.read_text())['versions'],
@@ -335,17 +403,18 @@ def run(framework,scenario='text'):
                 'account_stop_reenable_preserved_ids': True, 'retained_sibling_worker_and_port': True,
                 'host_process_starts': starts['host'], 'framework_process_starts': starts['peer'],
                 'synthetic_replies':per_round*4, 'scenario':scenario, 'large_media_payload_bytes':CORPUS['large_payload_bytes'] if large else 0, 'synthetic_media_replies':(per_round-4)*4, 'graceful_host_shutdowns': 2,
-                'nonebot_shutdown_hooks': [first_peer, final_peer] if framework == 'nonebot' else [],
-                'astrbot_adapter_shutdowns': [first_peer,final_peer] if framework in ('astrbot','astrbot-application') else [],
-                'astrbot_application_shutdowns':[first_peer,final_peer] if application else [],
+                'nonebot_shutdown_hooks': ([final_peer] if crash else [first_peer, final_peer]) if framework == 'nonebot' else [],
+                'astrbot_adapter_shutdowns': ([final_peer] if crash else [first_peer,final_peer]) if framework in ('astrbot','astrbot-application') else [],
+                'astrbot_application_shutdowns':([final_peer] if crash else [first_peer,final_peer]) if application else [],
                 'persistent_application_user_counters_verified':application,
-                'no_forced_kill_in_success_path': True, 'real_protocol_calls': 0, 'live_wechat_or_model_requests': 0,
+                'no_forced_kill_in_success_path': not crash,'deliberate_framework_crash':crash_recovery, 'no_cleanup_kill_in_success_path':True, 'real_protocol_calls': 0, 'live_wechat_or_model_requests': 0,
                 'runtime_fixture_binary_sha256': binary_sha,
                 'binary_snapshot':'private executable copy verified before each start and after both host runs',
                 'peer_snapshot':'private read-only peer/probe scripts and pinned committed AstrBot archive',
                 'deployment_source_path':'reports/deployment-source-'+source_sha+'.json',
                 'deployment_source_sha256':source_sha,
                 'limitations': ['Synthetic terminalization does not execute the native text transport or prove live delivery',
+                    'Deliberate crash interrupts source fetch before Submit, not native CDN, post-commit receipt ambiguity or runtime process crash' if crash else 'Framework reopen is graceful in this scenario',
                     'No exactly-once consumer processing guarantee',
                     'AstrBot application uses actual InitialLoader/Core/plugin/pipeline/SQLite with providers and dashboard listener disabled; metadata endpoint points to owned loopback' if application else 'AstrBot uses its real adapter and local consumer; no full application in this scenario',
                     'CDN/profile discovery and platform exchanges are synthetic; native media workers/preparation/body encoders are exercised locally']}
@@ -366,6 +435,8 @@ def run(framework,scenario='text'):
                     process.kill(); process.wait(timeout=3)
             for log in logs:
                 log.close()
+            if stalled is not None:
+                stalled.close()
 
 
 if __name__ == '__main__':

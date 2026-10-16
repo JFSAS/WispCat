@@ -10,6 +10,7 @@ from astrbot.api.message_components import At,Plain,Image,File
 from media_probe import local_media_url,payload,label_from_sender
 from stream_probe import probe
 from application_report import read_report,write_report
+from crash_reply import source_for
 
 
 class Main(star.Star):
@@ -26,8 +27,9 @@ class Main(star.Star):
     async def reply(self,event):
         message=event.message_obj
         text='/'+event.message_str.strip().lstrip('/')
+        crash_source=source_for(text)
         parts=[part for part in message.message if isinstance(part,(Image,File))]
-        if not parts and text not in ('/private-ping','/group-ping'):return
+        if not parts and not crash_source and text not in ('/private-ping','/group-ping'):return
         adapter=next(item for item in self.context.platform_manager.get_insts() if item.meta().name=='aiocqhttp')
         group=bool(event.get_group_id())
         login=await adapter.bot.get_login_info(self_id=message.self_id)
@@ -38,6 +40,10 @@ class Main(star.Star):
             assert str(member['user_id'])==event.get_sender_id() and member['wechat_roster_complete'] is False
             assert event.is_at_or_wake_command
         streamed=await probe(lambda action,**params:getattr(adapter.bot,action)(**params),message.self_id,message.message_id)
+        if crash_source:
+            value=read_report();value['crash_attempt']={'self_id':int(message.self_id),'user_id':int(event.get_sender_id()),'received_message_id':int(message.message_id)};write_report(value)
+            yield event.chain_result([File(name='interrupted.bin',url=crash_source)])
+            raise AssertionError('interrupted action unexpectedly completed')
         extra={}
         if parts:
             assert len(parts)==1

@@ -13,6 +13,7 @@ from nonebot.adapters.onebot.v11 import Adapter, Bot, MessageEvent, MessageSegme
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'framework'))
 from stream_probe import probe
 from media_probe import probe as media_probe
+from crash_reply import source_for
 
 report = Path(os.environ['FRAMEWORK_REPORT'])
 nonebot.init(driver='~fastapi', host='127.0.0.1', port=int(os.environ['FRAMEWORK_PORT']),
@@ -63,8 +64,9 @@ matcher = on_message(priority=1, block=True)
 @matcher.handle()
 async def reply(bot: Bot, event: MessageEvent):
     text = event.get_plaintext().strip()
+    crash_source = source_for(text)
     media = [part for part in event.message if part.type in ('image','file')]
-    if not media and text not in ('/private-ping', '/group-ping'):
+    if not media and not crash_source and text not in ('/private-ping', '/group-ping'):
         return
     login, status = await bot.get_login_info(), await bot.get_status()
     assert int(login['user_id']) == int(bot.self_id)
@@ -76,7 +78,12 @@ async def reply(bot: Bot, event: MessageEvent):
         assert member['user_id'] == event.user_id and member['wechat_roster_complete'] is False
         assert event.is_tome()
     extra = {}
-    if media:
+    if crash_source:
+        state['crash_attempt'] = {'self_id': event.self_id, 'user_id': event.user_id, 'received_message_id': event.message_id}
+        save()
+        await bot.send(event, MessageSegment('file', {'file': crash_source, 'name': 'interrupted.bin'}), at_sender=False)
+        raise AssertionError('interrupted action unexpectedly completed')
+    elif media:
         assert len(media) == 1
         part = media[0]
         content,extra = await media_probe(bot.call_api,event.self_id,{'type':part.type,'data':part.data},event.sender.nickname)
