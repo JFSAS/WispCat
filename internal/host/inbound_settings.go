@@ -20,7 +20,7 @@ type inboundPlan struct {
 }
 
 func effectiveInboundConfig(c Config) (Config, error) {
-	c.Accounts = append([]Account(nil), c.Accounts...)
+	c.Accounts = append([]Account{}, c.Accounts...)
 	for i, account := range c.Accounts {
 		profile, err := instances.Preview(c.StateDir, account.Instance)
 		if err != nil {

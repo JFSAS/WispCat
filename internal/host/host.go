@@ -25,7 +25,9 @@ import (
 )
 
 type accountRuntime struct {
+	accountLifecycle
 	config      Account
+	bootstrap   Account
 	connections *connectionSettings
 	inbound     *inboundSettings
 	channel     *service.Service
@@ -38,6 +40,9 @@ type Host struct {
 	lock          *os.File
 	state         *onebot.State
 	accounts      []*accountRuntime
+	retiring      []*accountRuntime
+	topology      *topologySettings
+	parent        context.Context
 	listener      net.Listener
 	admin         *http.Server
 	token         string
@@ -47,11 +52,13 @@ type Host struct {
 	started       bool
 	closed        bool
 	requests      chan struct{}
+	requestWork   sync.WaitGroup
 	shutdownDone  chan struct{}
 	shutdownError error
 }
 
 func New(c Config) (*Host, error) {
+	bootstrap := c
 	var err error
 	c, err = effectiveConfig(c)
 	if err != nil {
@@ -72,13 +79,7 @@ func New(c Config) (*Host, error) {
 	h.token, _ = token(c.TokenEnv)
 	cleanup := func(err error) (*Host, error) {
 		for _, a := range h.accounts {
-			if a.adapter.Runtime.Streams != nil {
-				_ = a.adapter.Runtime.Streams.Close()
-			}
-			_ = a.bot.CloseHistory()
-			if a.bot.Archive != nil {
-				_ = a.bot.Archive.Close()
-			}
+			_ = a.closeResources()
 		}
 		if h.state != nil {
 			_ = h.state.Close()
@@ -87,7 +88,22 @@ func New(c Config) (*Host, error) {
 		_ = lock.Close()
 		return nil, err
 	}
-	catalog, err := instances.Open(c.StateDir, c.Accounts[0].Instance)
+	// Reload persisted topology/settings after acquiring exclusive ownership.
+	// A previous process may have completed a save while this one waited.
+	c, err = effectiveConfig(bootstrap)
+	if err != nil {
+		return cleanup(err)
+	}
+	h.config = c
+	h.topology, err = newTopologySettings(h, bootstrap.Accounts)
+	if err != nil {
+		return cleanup(err)
+	}
+	fallback := ""
+	if len(c.Accounts) > 0 {
+		fallback = c.Accounts[0].Instance
+	}
+	catalog, err := instances.Open(c.StateDir, fallback)
 	if err != nil {
 		return cleanup(err)
 	}
@@ -114,60 +130,24 @@ func New(c Config) (*Host, error) {
 		return cleanup(e)
 	}
 	h.state = shared
-	for _, a := range c.Accounts {
-		p := profiles[a.Name]
-		archive, e := service.OpenDeliveryArchive(p.Directory)
-		if e != nil {
-			return cleanup(e)
+	for _, config := range c.Accounts {
+		owner, err := openAccount(c, config, profiles[config.Name], shared)
+		if err != nil {
+			return cleanup(err)
 		}
-		if e = archive.Recover(p.Directory); e != nil {
-			_ = archive.Close()
-			return cleanup(e)
+		for _, original := range h.topology.saved.Accounts {
+			if original.Name == config.Name {
+				owner.bootstrap = original
+				break
+			}
 		}
-		if e = service.RecoverBotIntents(p.Directory, archive); e != nil {
-			_ = archive.Close()
-			return cleanup(e)
-		}
-		channel := service.New(p.Directory, time.Second, p.App)
-		bot := service.BotAdapter{Service: channel, Archive: archive}
-		history, e := service.OpenEventHistory(p.Directory)
-		if e != nil {
-			_ = archive.Close()
-			return cleanup(e)
-		}
-		if e = bot.EnableHistory(history); e != nil {
-			_ = history.Close()
-			_ = archive.Close()
-			return cleanup(e)
-		}
-		if e = bot.RecoverOutgoingMedia(); e != nil {
-			_ = history.Close()
-			_ = archive.Close()
-			return cleanup(e)
-		}
-		state := shared
-		secret, _ := token(a.TokenEnv)
-		adapter := onebot.NewServer(onebot.New(bot, state), secret, "")
-		streams, e := onebot.OpenStreams(filepath.Join(p.Directory, "stream-temp"))
-		if e != nil {
-			_ = history.Close()
-			_ = archive.Close()
-			return cleanup(e)
-		}
-		adapter.Runtime.Streams = streams
-		settings, e := openConnectionSettings(p.Directory, c, a)
-		if e != nil {
-			_ = streams.Close()
-			_ = history.Close()
-			_ = archive.Close()
-			return cleanup(e)
-		}
-		h.accounts = append(h.accounts, &accountRuntime{config: a, channel: channel, bot: bot, adapter: adapter, connections: settings,
-			inbound: newInboundSettings(p.Directory, c, a)})
+		h.accounts = append(h.accounts, owner)
 	}
 	return h, nil
 }
 func (h *Host) Start(parent context.Context) error {
+	h.topology.mu.Lock()
+	defer h.topology.mu.Unlock()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.started || h.closed {
@@ -213,27 +193,14 @@ func (h *Host) Start(parent context.Context) error {
 	h.cancel = cancel
 	h.started = true
 	h.admin = &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 16384}
+	h.parent = ctx
 	for _, a := range h.accounts {
-		a.bot.EnableNativeMedia()
-		a.channel.Start(ctx, a.config.Mode)
-		h.wg.Add(1)
-		go func(a *accountRuntime) { defer h.wg.Done(); a.bot.RunArchive(ctx) }(a)
-		h.wg.Add(1)
-		go func(a *accountRuntime) { defer h.wg.Done(); a.channel.Wait() }(a)
-		a.inbound.mu.Lock()
-		a.inbound.manager = newInboundServer(a.adapter, ctx, a.listener, a.config.Listen, a.adapter.Token)
-		a.inbound.active = a.inbound.revision
-		a.inbound.mu.Unlock()
-		a.connections.manager = onebot.NewNetworkManager(a.adapter, ctx)
-		if err := a.connections.manager.Apply(ctx, initial[a]); err != nil {
+		if err := a.start(ctx, initial[a]); err != nil {
 			cancel()
 			return err
 		}
-		a.connections.mu.Lock()
-		a.connections.active = a.connections.revision
-		a.connections.mu.Unlock()
-
 	}
+	h.topology.active = h.topology.revision
 	h.wg.Add(1)
 	go func() { defer h.wg.Done(); _ = h.admin.Serve(listener) }()
 	return nil
@@ -275,63 +242,37 @@ func (h *Host) shutdown() {
 	ctx, stop := context.WithTimeout(context.Background(), 60*time.Second)
 	defer stop()
 	var failures []error
-	if started {
+	if started && h.admin != nil {
 		if err := h.admin.Shutdown(ctx); err != nil {
 			failures = append(failures, err)
 		}
-		if h.listener != nil {
-			_ = h.listener.Close()
-		}
-		for _, a := range h.accounts {
-			if a.inbound.manager != nil {
-				if err := a.inbound.manager.close(ctx); err != nil {
-					failures = append(failures, err)
-				}
-			}
-			if a.connections.manager != nil {
-				if err := a.connections.manager.Close(ctx); err != nil {
-					failures = append(failures, err)
-				}
-			}
-			if err := a.adapter.Close(ctx); err != nil {
-				failures = append(failures, err)
-			}
-			if a.listener != nil {
-				_ = a.listener.Close()
-			}
-		}
-	} else {
-		if h.listener != nil {
-			_ = h.listener.Close()
-		}
-		for _, a := range h.accounts {
-			if a.listener != nil {
-				_ = a.listener.Close()
-			}
-		}
 	}
-	// A caller deadline does not abandon ownership cleanup or permit another
-	// process to start while old protocol work is still in flight.
-	h.wg.Wait()
-	for _, a := range h.accounts {
-		// A request that ignored its cancellation still owns the account's
-		// storage. Caller/HTTP deadlines cannot release it underneath that work.
-		if a.inbound.manager != nil {
-			_ = a.inbound.manager.close(context.Background())
-		}
-		_ = a.adapter.Close(context.Background())
-		if a.adapter.Runtime.Streams != nil {
-			if err := a.adapter.Runtime.Streams.Close(); err != nil {
-				failures = append(failures, err)
-			}
-		}
-		if err := a.bot.CloseHistory(); err != nil {
+	if h.listener != nil {
+		_ = h.listener.Close()
+	}
+	h.topology.mu.Lock()
+	h.topology.closed = true
+	h.mu.Lock()
+	owners := append(append([]*accountRuntime(nil), h.accounts...), h.retiring...)
+	h.mu.Unlock()
+	h.topology.mu.Unlock()
+	for _, a := range owners {
+		a.retire()
+	}
+	for _, a := range owners {
+		if err := waitInbound(ctx, a.done); err != nil {
 			failures = append(failures, err)
 		}
-		if a.bot.Archive != nil {
-			if err := a.bot.Archive.Close(); err != nil {
-				failures = append(failures, err)
-			}
+	}
+	h.wg.Wait()
+	// No new admissions are possible after Close marks the host closed under
+	// the same mutex used by request registration. Keep the root/index alive
+	// even after HTTP/caller deadlines while admitted handlers still use them.
+	h.requestWork.Wait()
+	for _, a := range owners {
+		<-a.done
+		if a.closeError != nil {
+			failures = append(failures, a.closeError)
 		}
 	}
 	if h.state != nil {
@@ -356,6 +297,15 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "management_concurrency_limit", 503)
 		return
 	}
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		http.Error(w, "runtime_stopping", 503)
+		return
+	}
+	h.requestWork.Add(1)
+	h.mu.Unlock()
+	defer h.requestWork.Done()
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.Host != h.Address() {
@@ -380,9 +330,29 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(code)
 		_ = json.NewEncoder(w).Encode(value)
 	}
+	if r.URL.Path == "/topology" || r.URL.Path == "/topology/apply" {
+		h.serveTopology(w, r, reply)
+		return
+	}
 	if r.URL.Path == "/accounts" && r.Method == "GET" {
+		h.mu.Lock()
+		if h.closed {
+			h.mu.Unlock()
+			reply(503, map[string]string{"error": "runtime_stopping"})
+			return
+		}
+		owners := append([]*accountRuntime(nil), h.accounts...)
+		for _, a := range owners {
+			a.requests.Add(1)
+		}
+		h.mu.Unlock()
+		defer func() {
+			for _, a := range owners {
+				a.requests.Done()
+			}
+		}()
 		result := []any{}
-		for _, a := range h.accounts {
+		for _, a := range owners {
 			address := a.listener.Addr().String()
 			if a.inbound.manager != nil {
 				state, _ := a.inbound.manager.snapshot("", "")
@@ -408,16 +378,27 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var a *accountRuntime
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		reply(503, map[string]string{"error": "runtime_stopping"})
+		return
+	}
 	for _, v := range h.accounts {
 		if v.config.Name == parts[1] {
 			a = v
 			break
 		}
 	}
+	if a != nil {
+		a.requests.Add(1)
+	}
+	h.mu.Unlock()
 	if a == nil {
 		reply(404, map[string]string{"error": "account_not_configured"})
 		return
 	}
+	defer a.requests.Done()
 	action := strings.Join(parts[2:], "/")
 	if r.Method == "GET" {
 		switch action {
@@ -607,9 +588,13 @@ func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reply(202, map[string]string{"status": "queued"})
 }
 
-const managementPage = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>WeChat Runtime</title><style>body{max-width:960px;margin:40px auto;font:16px system-ui;background:#f6f7f9;color:#17212c}input,button{padding:10px;margin:5px}pre{background:white;padding:20px;white-space:pre-wrap}article{background:white;padding:20px;margin:15px 0;border-radius:8px}</style><h1>WeChat Runtime</h1><p>独立微信通道 · OneBot v11。Bot 和模型在外部进程运行。</p><input id="token" type="password" placeholder="管理令牌" autocomplete="off"><button id="refresh">刷新账号</button><main id="accounts"></main><script>
+const managementPage = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>WeChat Runtime</title><style>body{max-width:960px;margin:40px auto;font:16px system-ui;background:#f6f7f9;color:#17212c}input,button{padding:10px;margin:5px}pre{background:white;padding:20px;white-space:pre-wrap}article{background:white;padding:20px;margin:15px 0;border-radius:8px}</style><h1>WeChat Runtime</h1><p>独立微信通道 · OneBot v11。Bot 和模型在外部进程运行。</p><input id="token" type="password" placeholder="管理令牌" autocomplete="off"><button id="refresh">刷新账号</button><section id="topology-panel" hidden><h2>账号列表</h2><p>编辑成员列表以加入或停用账号。停用会保留历史和编号；现有账号的网络与在线状态使用各自控件。保存后单独应用。</p><textarea id="topology-editor" aria-label="账号成员配置" rows="12" style="width:95%"></textarea><br><button id="save-topology">保存账号列表</button><button id="apply-topology">应用账号列表</button><pre id="topology-state"></pre></section><main id="accounts"></main><script>
 const token=document.querySelector('#token'),out=document.querySelector('#accounts');
 async function call(path,method='GET'){const r=await fetch(path,{method,headers:{Authorization:'Bearer '+token.value,...(method==='POST'?{'Content-Type':'application/json'}:{})},...(method==='POST'?{body:'{}'}:{})});if(!r.ok)throw Error('HTTP '+r.status);return r.json()}
+const topologyPanel=document.querySelector('#topology-panel'),topologyEditor=document.querySelector('#topology-editor'),topologyState=document.querySelector('#topology-state');let topologyRevision='';
+async function loadTopology(){const state=await call('/topology');topologyRevision=state.revision;topologyEditor.value=JSON.stringify(state.saved,null,2);topologyState.textContent=JSON.stringify({applied:state.applied,active:state.active,retiring:state.retiring,error:state.error},null,2);topologyPanel.hidden=false}
+document.querySelector('#save-topology').onclick=async()=>{try{const plan=JSON.parse(topologyEditor.value);const response=await fetch('/topology',{method:'POST',headers:{Authorization:'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({revision:topologyRevision,plan})});if(!response.ok){const failure=await response.json();throw Error(failure.category||'保存失败')}await loadTopology()}catch(e){alert(e.message)}};
+document.querySelector('#apply-topology').onclick=async()=>{try{await call('/topology/apply','POST');await refresh()}catch(e){alert(e.message);await loadTopology()}};
 async function loadListener(card,name){
  const title=document.createElement('h3');title.textContent='OneBot 入站监听';
  const hint=document.createElement('p');hint.textContent='保存后单独应用。换端口或令牌会断开旧入站请求和 WebSocket，微信会话继续运行。';
@@ -622,6 +607,6 @@ async function loadListener(card,name){
  const apply=document.createElement('button');apply.textContent='应用入站监听';apply.onclick=async()=>{try{await call(path+'/apply','POST');await load();await refresh()}catch(e){alert(e.message);await load()}};
  card.append(title,hint,editor,save,apply,info);await load()
 }
-async function refresh(){try{const rows=await call('/accounts');out.replaceChildren();for(const a of rows){const card=document.createElement('article'),title=document.createElement('h2'),pre=document.createElement('pre');title.textContent=a.name;pre.textContent=JSON.stringify(a,null,2);card.append(title,pre);for(const [name,action] of [['恢复缓存连接','online'],['离线','offline'],['申请二维码','login/start'],['取消扫码','login/cancel']]){const b=document.createElement('button');b.textContent=name;b.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/'+action,'POST');await refresh()}catch(e){alert(e.message)}};card.append(b)}const b=document.createElement('button');b.textContent='显示二维码';b.onclick=async()=>{try{const st=await call('/accounts/'+encodeURIComponent(a.name)+'/login');if(!st.image_ready)throw Error('二维码尚未就绪，请稍后刷新');const r=await fetch('/accounts/'+encodeURIComponent(a.name)+'/login/image?id='+encodeURIComponent(st.id),{headers:{Authorization:'Bearer '+token.value}});if(!r.ok)throw Error('二维码读取失败');const img=document.createElement('img'),url=URL.createObjectURL(await r.blob());img.width=240;img.onload=()=>URL.revokeObjectURL(url);img.src=url;card.append(img)}catch(e){alert(e.message)}};card.append(b);const archive=document.createElement('pre');archive.hidden=true;for(const [label,path,method] of [['投递归档状态','archive','GET'],['归档已完成投递','archive/compact','POST'],['临时传输状态','streams','GET'],['清理传输临时文件','streams/clean','POST'],['入站媒体缓存','media-cache','GET'],['回收入站缓存','media-cache/compact','POST'],['发送媒体状态','outgoing-media','GET'],['回收已确认发送副本','outgoing-media/compact','POST']]){const button=document.createElement('button');button.textContent=label;button.onclick=async()=>{try{const result=await call('/accounts/'+encodeURIComponent(a.name)+'/'+path,method);archive.textContent=JSON.stringify(result,null,2);archive.hidden=false}catch(e){alert(e.message)}};card.append(button)}card.append(archive);const editor=document.createElement('textarea');editor.rows=12;editor.style.width='95%';const info=document.createElement('p');let revision='';async function loadConnections(){const state=await call('/accounts/'+encodeURIComponent(a.name)+'/connections');revision=state.revision;editor.value=JSON.stringify(state.saved,null,2);info.textContent=state.applied?'连接配置已应用':'已保存连接配置尚未应用'}const save=document.createElement('button');save.textContent='保存连接配置';save.onclick=async()=>{try{const plan=JSON.parse(editor.value);const response=await fetch('/accounts/'+encodeURIComponent(a.name)+'/connections',{method:'POST',headers:{Authorization:'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({revision,plan})});if(!response.ok)throw Error('保存失败：HTTP '+response.status);await loadConnections()}catch(e){alert(e.message)}};const apply=document.createElement('button');apply.textContent='应用已保存连接';apply.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/connections/apply','POST');await loadConnections()}catch(e){alert(e.message)}};card.append(info,editor,save,apply);out.append(card);await loadConnections();await loadListener(card,a.name)}}catch(e){out.textContent=e.message}}
+async function refresh(){try{await loadTopology();const rows=await call('/accounts');out.replaceChildren();for(const a of rows){const card=document.createElement('article'),title=document.createElement('h2'),pre=document.createElement('pre');title.textContent=a.name;pre.textContent=JSON.stringify(a,null,2);card.append(title,pre);for(const [name,action] of [['恢复缓存连接','online'],['离线','offline'],['申请二维码','login/start'],['取消扫码','login/cancel']]){const b=document.createElement('button');b.textContent=name;b.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/'+action,'POST');await refresh()}catch(e){alert(e.message)}};card.append(b)}const b=document.createElement('button');b.textContent='显示二维码';b.onclick=async()=>{try{const st=await call('/accounts/'+encodeURIComponent(a.name)+'/login');if(!st.image_ready)throw Error('二维码尚未就绪，请稍后刷新');const r=await fetch('/accounts/'+encodeURIComponent(a.name)+'/login/image?id='+encodeURIComponent(st.id),{headers:{Authorization:'Bearer '+token.value}});if(!r.ok)throw Error('二维码读取失败');const img=document.createElement('img'),url=URL.createObjectURL(await r.blob());img.width=240;img.onload=()=>URL.revokeObjectURL(url);img.src=url;card.append(img)}catch(e){alert(e.message)}};card.append(b);const archive=document.createElement('pre');archive.hidden=true;for(const [label,path,method] of [['投递归档状态','archive','GET'],['归档已完成投递','archive/compact','POST'],['临时传输状态','streams','GET'],['清理传输临时文件','streams/clean','POST'],['入站媒体缓存','media-cache','GET'],['回收入站缓存','media-cache/compact','POST'],['发送媒体状态','outgoing-media','GET'],['回收已确认发送副本','outgoing-media/compact','POST']]){const button=document.createElement('button');button.textContent=label;button.onclick=async()=>{try{const result=await call('/accounts/'+encodeURIComponent(a.name)+'/'+path,method);archive.textContent=JSON.stringify(result,null,2);archive.hidden=false}catch(e){alert(e.message)}};card.append(button)}card.append(archive);const editor=document.createElement('textarea');editor.rows=12;editor.style.width='95%';const info=document.createElement('p');let revision='';async function loadConnections(){const state=await call('/accounts/'+encodeURIComponent(a.name)+'/connections');revision=state.revision;editor.value=JSON.stringify(state.saved,null,2);info.textContent=state.applied?'连接配置已应用':'已保存连接配置尚未应用'}const save=document.createElement('button');save.textContent='保存连接配置';save.onclick=async()=>{try{const plan=JSON.parse(editor.value);const response=await fetch('/accounts/'+encodeURIComponent(a.name)+'/connections',{method:'POST',headers:{Authorization:'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({revision,plan})});if(!response.ok)throw Error('保存失败：HTTP '+response.status);await loadConnections()}catch(e){alert(e.message)}};const apply=document.createElement('button');apply.textContent='应用已保存连接';apply.onclick=async()=>{try{await call('/accounts/'+encodeURIComponent(a.name)+'/connections/apply','POST');await loadConnections()}catch(e){alert(e.message)}};card.append(info,editor,save,apply);out.append(card);await loadConnections();await loadListener(card,a.name)}}catch(e){out.textContent=e.message}}
 document.querySelector('#refresh').onclick=refresh;
 </script></html>`

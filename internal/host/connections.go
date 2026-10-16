@@ -18,9 +18,18 @@ import (
 )
 
 func effectiveConfig(c Config) (Config, error) {
+	var err error
+	c, err = effectiveTopology(c)
+	if err != nil {
+		return c, err
+	}
+	return effectiveAccounts(c)
+}
+
+func effectiveAccounts(c Config) (Config, error) {
 	// A persisted token environment may replace a retired bootstrap name.
 	// Bound discovery before private reads, then validate effective accounts.
-	if c.StateDir == "" || !loopbackListen(c.Listen) || len(c.Accounts) < 1 || len(c.Accounts) > 16 {
+	if c.StateDir == "" || !loopbackListen(c.Listen) || c.Accounts == nil || len(c.Accounts) > 16 {
 		return c, errors.New("invalid_runtime_topology")
 	}
 	if _, err := token(c.TokenEnv); err != nil {
@@ -34,7 +43,7 @@ func effectiveConfig(c Config) (Config, error) {
 	if err := c.validate(false); err != nil {
 		return c, err
 	}
-	c.Accounts = append([]Account(nil), c.Accounts...)
+	c.Accounts = append([]Account{}, c.Accounts...)
 	for i, a := range c.Accounts {
 		p, err := instances.Preview(c.StateDir, a.Instance)
 		if err != nil {

@@ -81,7 +81,7 @@ func (c Config) Validate() error {
 	return c.validate(true)
 }
 func (c Config) validate(networks bool) error {
-	if c.StateDir == "" || !loopbackListen(c.Listen) || len(c.Accounts) < 1 || len(c.Accounts) > 16 {
+	if c.StateDir == "" || !loopbackListen(c.Listen) || c.Accounts == nil || len(c.Accounts) > 16 {
 		return errors.New("invalid_runtime_topology")
 	}
 	if _, err := token(c.TokenEnv); err != nil {
