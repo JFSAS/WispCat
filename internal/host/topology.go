@@ -316,7 +316,7 @@ func (s *topologySettings) apply(ctx context.Context) (err error) {
 			return err
 		}
 		var owner *accountRuntime
-		owner, err = openAccount(top, config, profiles[config.Name], h.state)
+		owner, err = openAccount(top, config, profiles[config.Name], h.state, h.workerFactory)
 		if err != nil {
 			s.lastError = "topology_preflight_failed"
 			return err

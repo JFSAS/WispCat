@@ -31,6 +31,7 @@ type accountRuntime struct {
 	connections *connectionSettings
 	inbound     *inboundSettings
 	channel     *service.Service
+	worker      accountWorker
 	bot         service.BotAdapter
 	adapter     *onebot.Server
 	listener    net.Listener
@@ -56,9 +57,14 @@ type Host struct {
 	requestWork   sync.WaitGroup
 	shutdownDone  chan struct{}
 	shutdownError error
+	workerFactory *accountWorkerFactory
 }
 
 func New(c Config) (*Host, error) {
+	return newHost(c, nil)
+}
+
+func newHost(c Config, factory *accountWorkerFactory) (*Host, error) {
 	bootstrap := c
 	var err error
 	c, err = effectiveConfig(c)
@@ -76,7 +82,7 @@ func New(c Config) (*Host, error) {
 		_ = lock.Close()
 		return nil, errors.New("state_root_in_use")
 	}
-	h := &Host{config: c, lock: lock, requests: make(chan struct{}, 16)}
+	h := &Host{config: c, lock: lock, requests: make(chan struct{}, 16), workerFactory: factory}
 	h.token, _ = token(c.TokenEnv)
 	cleanup := func(err error) (*Host, error) {
 		for _, a := range h.accounts {
@@ -94,6 +100,11 @@ func New(c Config) (*Host, error) {
 	c, err = effectiveConfig(bootstrap)
 	if err != nil {
 		return cleanup(err)
+	}
+	if factory != nil {
+		if err := factory.checkRoot(c); err != nil {
+			return cleanup(err)
+		}
 	}
 	h.config = c
 	h.token, err = token(c.TokenEnv)
@@ -140,7 +151,7 @@ func New(c Config) (*Host, error) {
 	}
 	h.state = shared
 	for _, config := range c.Accounts {
-		owner, err := openAccount(c, config, profiles[config.Name], shared)
+		owner, err := openAccount(c, config, profiles[config.Name], shared, factory)
 		if err != nil {
 			return cleanup(err)
 		}

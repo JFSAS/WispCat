@@ -12,12 +12,30 @@ import (
 	"github.com/JFSAS/wechat-runtime/internal/service"
 )
 
-func openAccount(top Config, config Account, profile instances.Profile, state *onebot.State) (_ *accountRuntime, err error) {
+// Account ownership depends on a start/join interface. Production always uses
+// the native Service; a build-tagged deployment fixture supplies the second
+// adapter without starting a production session loop.
+type accountWorker interface {
+	Start(context.Context, string)
+	Wait()
+}
+type accountWorkerFactory struct {
+	checkRoot func(Config) error
+	check     func(Account, string) error
+	open      func(Account, *service.Service) (accountWorker, error)
+}
+
+func openAccount(top Config, config Account, profile instances.Profile, state *onebot.State, factory *accountWorkerFactory) (_ *accountRuntime, err error) {
+	config.Instance = profile.App
+	if factory != nil {
+		if err := factory.check(config, profile.Directory); err != nil {
+			return nil, err
+		}
+	}
 	archive, err := service.OpenDeliveryArchive(profile.Directory)
 	if err != nil {
 		return nil, err
 	}
-	config.Instance = profile.App
 	a := &accountRuntime{config: config, accountLifecycle: accountLifecycle{done: make(chan struct{})}}
 	a.bot.Archive = archive
 	defer func() {
@@ -44,6 +62,13 @@ func openAccount(top Config, config Account, profile instances.Profile, state *o
 	if err = a.bot.RecoverOutgoingMedia(); err != nil {
 		return nil, err
 	}
+	a.worker = a.channel
+	if factory != nil {
+		a.worker, err = factory.open(config, a.channel)
+		if err != nil {
+			return nil, err
+		}
+	}
 	secret, err := token(config.TokenEnv)
 	if err != nil {
 		return nil, err
@@ -66,10 +91,10 @@ func (a *accountRuntime) start(parent context.Context, networks []onebot.Network
 	ctx, cancel := context.WithCancel(parent)
 	a.cancel = cancel
 	a.bot.EnableNativeMedia()
-	a.channel.Start(ctx, a.config.Mode)
+	a.worker.Start(ctx, a.config.Mode)
 	a.workers.Add(2)
 	go func() { defer a.workers.Done(); a.bot.RunArchive(ctx) }()
-	go func() { defer a.workers.Done(); a.channel.Wait() }()
+	go func() { defer a.workers.Done(); a.worker.Wait() }()
 	a.inbound.mu.Lock()
 	a.inbound.manager = newInboundServer(a.adapter, ctx, a.listener, a.config.Listen, a.adapter.Token)
 	a.inbound.active = a.inbound.revision
