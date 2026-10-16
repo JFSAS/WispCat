@@ -469,6 +469,9 @@ func (a BotAdapter) Download(ctx context.Context, account, conversation, file st
 		}
 		return bot.Content{Data: content, MIME: metadata.MIME, Name: metadata.Name}, nil
 	}
+	if a.Service.history != nil {
+		return a.downloadIncomingMedia(ctx, account, conversation, parts[0], parts[1])
+	}
 	id, err := a.Service.Download(account, conversation, parts[0], parts[1])
 	if err != nil {
 		return bot.Content{}, channelError(err)

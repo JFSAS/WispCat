@@ -22,6 +22,13 @@ func (a BotAdapter) EnableNativeMedia() {
 func (a BotAdapter) accountedMediaLocked() (int64, error) {
 	s := a.Service
 	active := mediaCachedBytes(s.data)
+	if s.history != nil {
+		media, err := s.history.mediaStatsLocked(s.data.Binding)
+		if err != nil {
+			return 0, err
+		}
+		active += media.ResidentBytes
+	}
 	if a.Archive == nil {
 		return active, nil
 	}
@@ -44,7 +51,7 @@ func (a BotAdapter) accountedMediaLocked() (int64, error) {
 }
 
 func (a BotAdapter) wrapArchiveMediaDownloader() {
-	if a.Archive == nil {
+	if a.Archive == nil && a.Service.history == nil {
 		return
 	}
 	s := a.Service
@@ -62,6 +69,12 @@ func (a BotAdapter) wrapArchiveMediaDownloader() {
 		}
 		binding, original := s.data.Binding, s.data.MediaJobs[request.ID]
 		attempt := original.Attempts
+		if s.history != nil {
+			if _, err := s.history.mediaStatsLocked(binding); err != nil {
+				s.mu.RUnlock()
+				return nil, err
+			}
+		}
 		s.mu.RUnlock()
 		result, err := base(ctx, request)
 		if err != nil || result == nil {
@@ -76,9 +89,48 @@ func (a BotAdapter) wrapArchiveMediaDownloader() {
 		if job != original || job.Binding != s.data.Binding || job.Status != "downloading" || job.Attempts != attempt {
 			return nil, ErrMediaUnavailable
 		}
+		if s.history != nil {
+			if err = ctx.Err(); err != nil {
+				return nil, err
+			}
+			if err = validateMediaResult(request, result); err != nil {
+				return nil, err
+			}
+		}
 		cached, err := a.accountedMediaLocked()
 		if err != nil {
 			return nil, err
+		}
+		if s.history != nil {
+			stats, e := s.history.mediaStatsLocked(binding)
+			if e != nil {
+				return nil, e
+			}
+			other := cached - stats.ResidentBytes
+			target := int64(MaxMediaCacheBytes) - other - int64(len(result.Data))
+			if target < 0 {
+				return nil, ErrMediaQueueFull
+			}
+			if stats.ResidentBytes > target || stats.ResidentFiles >= incomingMediaFiles {
+				if _, _, e = s.history.reclaimMediaLocked(ctx, s, target, incomingMediaFiles-1); e != nil {
+					return nil, e
+				}
+				cached, e = a.accountedMediaLocked()
+				if e != nil {
+					return nil, e
+				}
+			}
+			stats, e = s.history.mediaStatsLocked(binding)
+			if e != nil {
+				return nil, e
+			}
+			if cached+int64(len(result.Data)) > MaxMediaCacheBytes || stats.ResidentFiles >= incomingMediaFiles {
+				return nil, ErrMediaQueueFull
+			}
+			if e = s.history.reserveMediaLocked(s, request.ID, job, result); e != nil {
+				return nil, e
+			}
+			return result, nil
 		}
 		if cached+int64(len(result.Data)) > MaxMediaCacheBytes {
 			return nil, ErrMediaQueueFull

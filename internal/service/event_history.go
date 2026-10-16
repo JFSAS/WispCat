@@ -74,23 +74,33 @@ type EventHistory struct {
 	recent             map[string]string
 	workingBytes       int
 	directoryKey       []byte
+	publishedMedia     uint64
+	publishedGuard     int
+	deliveryArchive    *DeliveryArchive
+	mediaRemove        func(string) error
+	mediaSync          func() error
+	mediaWaiters       map[string]int
 }
 
 type HistoryStats struct {
-	Format              string `json:"format"`
-	Messages            uint64 `json:"messages"`
-	FirstCursor         uint64 `json:"first_cursor"`
-	Cursor              uint64 `json:"cursor"`
-	FileBytes           int64  `json:"file_bytes"`
-	Users               uint64 `json:"users"`
-	Conversations       uint64 `json:"conversations"`
-	ObservedMembers     uint64 `json:"observed_members"`
-	DirectoryRevision   uint64 `json:"directory_revision"`
-	RawVariants         uint64 `json:"raw_variants"`
-	NativeFragments     uint64 `json:"native_fragments"`
-	WorkingCacheBytes   int    `json:"working_cache_bytes"`
-	WorkingMessageLimit int    `json:"working_message_limit"`
-	WorkingBytesLimit   int    `json:"working_bytes_limit"`
+	Format                 string `json:"format"`
+	Messages               uint64 `json:"messages"`
+	FirstCursor            uint64 `json:"first_cursor"`
+	Cursor                 uint64 `json:"cursor"`
+	FileBytes              int64  `json:"file_bytes"`
+	Users                  uint64 `json:"users"`
+	Conversations          uint64 `json:"conversations"`
+	ObservedMembers        uint64 `json:"observed_members"`
+	DirectoryRevision      uint64 `json:"directory_revision"`
+	RawVariants            uint64 `json:"raw_variants"`
+	NativeFragments        uint64 `json:"native_fragments"`
+	WorkingCacheBytes      int    `json:"working_cache_bytes"`
+	WorkingMessageLimit    int    `json:"working_message_limit"`
+	WorkingBytesLimit      int    `json:"working_bytes_limit"`
+	IncomingMediaTasks     uint64 `json:"incoming_media_tasks"`
+	IncomingResidentFiles  uint64 `json:"incoming_accounted_files"`
+	IncomingResidentBytes  int64  `json:"incoming_accounted_payload_bytes"`
+	IncomingReclaimedBytes int64  `json:"incoming_released_payload_bytes"`
 }
 
 func historyNamespace(data *store.Data) string {
@@ -103,6 +113,7 @@ type historyGuard struct {
 	Identity          string      `json:"identity"`
 	Meta              historyMeta `json:"meta"`
 	DirectoryRevision uint64      `json:"directory_revision,omitempty"`
+	MediaRevision     uint64      `json:"media_revision"`
 }
 
 func OpenEventHistory(directory string) (*EventHistory, error) {
@@ -118,10 +129,13 @@ func OpenEventHistory(directory string) (*EventHistory, error) {
 		if _, err := decodeHistoryMeta(fields["meta"]); err != nil {
 			return nil, ErrEventHistory
 		}
-		if json.Unmarshal(raw, &value) != nil || value.Schema != 1 || !mediaID(value.Identity, 64) || !validHistoryMeta(value.Meta) {
+		if json.Unmarshal(raw, &value) != nil || (value.Schema != 1 && value.Schema != 2) || !mediaID(value.Identity, 64) || !validHistoryMeta(value.Meta) {
 			return nil, ErrEventHistory
 		}
 		if value.Meta.Schema == 2 && (fields["directory_revision"] == nil || string(fields["directory_revision"]) == "null") {
+			return nil, ErrEventHistory
+		}
+		if value.Schema == 2 && (fields["media_revision"] == nil || string(fields["media_revision"]) == "null") {
 			return nil, ErrEventHistory
 		}
 		guard = &value
@@ -169,6 +183,12 @@ func OpenEventHistory(directory string) (*EventHistory, error) {
 					return ErrEventHistory
 				}
 			}
+			if guard.Schema == 2 {
+				media, ready, e := h.mediaMeta(tx, m.Account, m.Namespace)
+				if e != nil || !ready || media.Revision < guard.MediaRevision {
+					return ErrEventHistory
+				}
+			}
 		}
 		return nil
 	})
@@ -207,6 +227,7 @@ func validHistoryMeta(m historyMeta) bool {
 func (h *EventHistory) ensureGuard(account string) error {
 	var meta historyMeta
 	var directory directoryMeta
+	var media incomingMediaMeta
 	err := h.db.View(func(tx *securedb.Tx) error {
 		var err error
 		meta, _, err = h.meta(tx, account, "")
@@ -218,15 +239,19 @@ func (h *EventHistory) ensureGuard(account string) error {
 		if err != nil || !ready || meta.Schema != 2 {
 			return ErrEventHistory
 		}
+		media, ready, err = h.mediaMeta(tx, account, meta.Namespace)
+		if err != nil || !ready {
+			return ErrEventHistory
+		}
 		return nil
 	})
 	if err != nil || !validHistoryMeta(meta) {
 		return ErrEventHistory
 	}
-	if h.published == meta && h.publishedDirectory == directory.Revision {
+	if h.publishedGuard == 2 && h.published == meta && h.publishedDirectory == directory.Revision && h.publishedMedia == media.Revision {
 		return nil
 	}
-	raw, _ := json.Marshal(historyGuard{Schema: 1, Identity: h.identity, Meta: meta, DirectoryRevision: directory.Revision})
+	raw, _ := json.Marshal(historyGuard{Schema: 2, Identity: h.identity, Meta: meta, DirectoryRevision: directory.Revision, MediaRevision: media.Revision})
 	if h.guardWrite != nil {
 		err = h.guardWrite(raw)
 	} else {
@@ -237,6 +262,7 @@ func (h *EventHistory) ensureGuard(account string) error {
 	}
 	h.published = meta
 	h.publishedDirectory = directory.Revision
+	h.publishedMedia, h.publishedGuard = media.Revision, 2
 	return nil
 }
 func (h *EventHistory) Close() error {
@@ -255,6 +281,7 @@ func (a BotAdapter) EnableHistory(h *EventHistory) error {
 	if h == nil || s.history != nil {
 		return ErrEventHistory
 	}
+	h.deliveryArchive = a.Archive
 	if s.data != nil {
 		h.writeMu.Lock()
 		err := h.importCheckpoint(s.data)
@@ -433,6 +460,9 @@ func (h *EventHistory) importCheckpoint(data *store.Data) error {
 			if err != nil {
 				return err
 			}
+			if err = h.captureMedia(tx, s); err != nil {
+				return err
+			}
 			return h.putMeta(tx, updated)
 		}
 		// Missing legacy bodies cannot be reconstructed. Preserve the contiguous
@@ -474,6 +504,9 @@ func (h *EventHistory) importCheckpoint(data *store.Data) error {
 		}
 		meta, _, err = h.upgradeDirectory(tx, s, meta, true)
 		if err != nil {
+			return err
+		}
+		if err = h.captureMedia(tx, s); err != nil {
 			return err
 		}
 		if err = h.putMeta(tx, meta); err != nil {
@@ -582,6 +615,9 @@ func (h *EventHistory) persistLocked(s *Service) error {
 				return err
 			}
 		}
+		if err = h.captureMedia(tx, s); err != nil {
+			return err
+		}
 		if err = h.putDirectoryMeta(tx, directory); err != nil {
 			return err
 		}
@@ -596,6 +632,14 @@ func (h *EventHistory) persistLocked(s *Service) error {
 	if err = h.ensureGuard(s.data.Binding); err != nil {
 		h.unavailable = true
 		return ErrEventHistory
+	}
+	if err = h.finishMediaDeletesLocked(s); err != nil {
+		h.unavailable = true
+		return err
+	}
+	if err = h.pruneMediaLocked(s); err != nil {
+		h.unavailable = true
+		return err
 	}
 	if err = h.compactWorkingLocked(s); err != nil {
 		h.unavailable = true
@@ -635,6 +679,11 @@ func (h *EventHistory) Stats(account string) (HistoryStats, error) {
 			}
 			result.Users, result.Conversations, result.ObservedMembers, result.DirectoryRevision = dir.Users, dir.Conversations, dir.Members, dir.Revision
 			result.RawVariants, result.NativeFragments = dir.Variants, dir.Fragments
+			media, ready, e := h.mediaMeta(tx, account, meta.Namespace)
+			if e != nil || !ready || media.Revision != h.publishedMedia {
+				return ErrEventHistory
+			}
+			result.IncomingMediaTasks, result.IncomingResidentFiles, result.IncomingResidentBytes, result.IncomingReclaimedBytes = media.Tasks, media.ResidentFiles, media.ResidentBytes, media.ReclaimedBytes
 		}
 		return err
 	})

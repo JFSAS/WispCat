@@ -272,6 +272,19 @@ func (tx *Tx) Put(bucket string, key, value []byte) error {
 	return b.Put(key, raw)
 }
 
+// Delete removes one index record inside its caller's transaction. The caller
+// remains responsible for committing replacement metadata and related indexes.
+func (tx *Tx) Delete(bucket string, key []byte) error {
+	if bucket == "" || len(bucket) > 64 || len(key) == 0 || len(key) > 128 {
+		return errors.New("index_record_size_invalid")
+	}
+	b := tx.tx.Bucket([]byte(bucket))
+	if b == nil {
+		return nil
+	}
+	return b.Delete(key)
+}
+
 func recordAAD(bucket string, key []byte) []byte {
 	return append([]byte(domain+"\x00"+bucket+"\x00"), key...)
 }

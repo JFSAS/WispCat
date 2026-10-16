@@ -555,6 +555,9 @@ func (h *EventHistory) indexMessageID(tx *securedb.Tx, account, id string) error
 	return tx.Put("message-ids", key, raw)
 }
 func (h *EventHistory) restoreRuntimeLocked(s *Service) error {
+	if err := h.restoreMediaLocked(s); err != nil {
+		return err
+	}
 	return h.directoryRead(s.data.Binding, func(tx *securedb.Tx) error {
 		unavailable := map[string]bool{}
 		for _, raw := range s.data.Unavailable {

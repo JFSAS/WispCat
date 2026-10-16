@@ -349,12 +349,19 @@ func TestHistoryMediaDescriptorSurvivesNativeEvictionWithoutExposingKeys(t *test
 		t.Fatal("private media reference leaked")
 	}
 	s.SetMediaDownloader(func(context.Context, MediaDownloadRequest) (*cdn.Result, error) { return verifiedMedia(body), nil })
+	a.wrapArchiveMediaDownloader()
 	id := mediaQueueID(t, s, conversation, message, "regular")
 	if err = s.downloadQueued(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	content, err := a.Download(context.Background(), s.data.Binding, conversation, message+"/regular")
-	if err != nil || !bytes.Equal(content.Data, body) || s.data.MediaJobs[id].Status != "downloaded" {
+	var archived *incomingMediaRecord
+	lookup := h.db.View(func(tx *securedb.Tx) error {
+		var e error
+		archived, e = h.mediaRecord(tx, s.data.Binding, id)
+		return e
+	})
+	if err != nil || !bytes.Equal(content.Data, body) || lookup != nil || archived == nil || archived.Job.Status != "downloaded" || s.data.MediaJobs[id] != nil {
 		t.Fatal("history media descriptor unusable", err)
 	}
 	if _, err = s.QueueMediaDownload(s.sessionID([]byte("other")), message, "regular"); err == nil {
