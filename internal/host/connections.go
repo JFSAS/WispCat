@@ -18,6 +18,19 @@ import (
 )
 
 func effectiveConfig(c Config) (Config, error) {
+	// A persisted token environment may replace a retired bootstrap name.
+	// Bound discovery before private reads, then validate effective accounts.
+	if c.StateDir == "" || !loopbackListen(c.Listen) || len(c.Accounts) < 1 || len(c.Accounts) > 16 {
+		return c, errors.New("invalid_runtime_topology")
+	}
+	if _, err := token(c.TokenEnv); err != nil {
+		return c, err
+	}
+	var err error
+	c, err = effectiveInboundConfig(c)
+	if err != nil {
+		return c, err
+	}
 	if err := c.validate(false); err != nil {
 		return c, err
 	}
@@ -60,6 +73,9 @@ type connectionSettings struct {
 }
 
 func planRevision(plan connectionPlan) string {
+	return configRevision(plan)
+}
+func configRevision(plan any) string {
 	raw, _ := json.Marshal(plan)
 	hash := sha256.Sum256(raw)
 	return hex.EncodeToString(hash[:16])

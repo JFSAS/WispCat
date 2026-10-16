@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/JFSAS/wechat-runtime/pkg/bot"
@@ -36,17 +37,46 @@ type ReverseConfig struct {
 	Role  string `json:"role,omitempty"`
 }
 type Server struct {
-	Runtime     *Runtime
-	Token       string
-	Host        string
-	mu          sync.Mutex
-	connections map[*websocket.Conn]struct{}
-	statuses    map[string]ConnectionStatus
-	closing     bool
-	wg          sync.WaitGroup
-	shutdown    context.Context
-	cancel      context.CancelFunc
-	httpSlots   chan struct{}
+	Runtime       *Runtime
+	Token         string
+	Host          string
+	mu            sync.Mutex
+	connections   map[*websocket.Conn]struct{}
+	statuses      map[string]ConnectionStatus
+	closing       bool
+	wg            sync.WaitGroup
+	shutdown      context.Context
+	cancel        context.CancelFunc
+	httpSlots     chan struct{}
+	mediaEndpoint atomic.Pointer[inboundEndpoint]
+}
+
+type inboundEndpoint struct{ host, token string }
+type inboundEndpointKey struct{}
+
+// ServeEndpoint pins authentication and media validation to this listener's
+// immutable configuration, including requests draining during a replacement.
+func (s *Server) ServeEndpoint(w http.ResponseWriter, r *http.Request, host, token string) {
+	ctx := context.WithValue(r.Context(), inboundEndpointKey{}, inboundEndpoint{host, token})
+	s.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// SetMediaEndpoint changes newly generated links without mutating the boot
+// configuration or restarting reverse connections and protocol work.
+func (s *Server) SetMediaEndpoint(host, token string) {
+	s.mediaEndpoint.Store(&inboundEndpoint{host, token})
+}
+
+func (s *Server) endpoint(ctx context.Context) inboundEndpoint {
+	if ctx != nil {
+		if endpoint, ok := ctx.Value(inboundEndpointKey{}).(inboundEndpoint); ok {
+			return endpoint
+		}
+	}
+	if endpoint := s.mediaEndpoint.Load(); endpoint != nil {
+		return *endpoint
+	}
+	return inboundEndpoint{s.Host, s.Token}
 }
 
 func NewServer(runtime *Runtime, token, host string) *Server {
@@ -100,7 +130,8 @@ func (s *Server) Close(ctx context.Context) error {
 	}
 }
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
-	if s.Host != "" && r.Host != s.Host {
+	endpoint := s.endpoint(r.Context())
+	if endpoint.host != "" && r.Host != endpoint.host {
 		http.Error(w, "host_not_allowed", 403)
 		return false
 	}
@@ -115,7 +146,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
 	if auth == "" && r.URL.Query().Get("access_token") != "" {
 		auth = "Bearer " + r.URL.Query().Get("access_token")
 	}
-	if s.Token == "" {
+	if endpoint.token == "" {
 		http.Error(w, "server_token_not_configured", 503)
 		return false
 	}
@@ -123,7 +154,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, "authentication_required", 401)
 		return false
 	}
-	if subtle.ConstantTimeCompare([]byte(auth), []byte("Bearer "+s.Token)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(auth), []byte("Bearer "+endpoint.token)) != 1 {
 		http.Error(w, "authentication_failed", 403)
 		return false
 	}

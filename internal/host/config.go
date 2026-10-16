@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/JFSAS/wechat-runtime/internal/instances"
@@ -62,8 +63,9 @@ func validName(name string) bool {
 	return name != "" && len(name) <= 64 && strings.Trim(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") == ""
 }
 func loopbackListen(address string) bool {
-	host, _, err := net.SplitHostPort(address)
-	return err == nil && net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()
+	host, port, err := net.SplitHostPort(address)
+	number, portErr := strconv.ParseUint(port, 10, 16)
+	return err == nil && portErr == nil && number <= 65535 && net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()
 }
 func token(name string) (string, error) {
 	if name == "" {

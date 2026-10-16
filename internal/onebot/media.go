@@ -43,29 +43,34 @@ func fetchMedia(ctx context.Context, source string) ([]byte, error) {
 	return body, nil
 }
 func (s *Server) mediaURL(account, conversation, file string) string {
-	if s.Host == "" {
+	endpoint := s.endpoint(nil)
+	if endpoint.host == "" {
 		return ""
 	}
 	q := url.Values{"account": {account}, "conversation": {conversation}, "file": {file}, "expires": {strconv.FormatInt(time.Now().Add(5*time.Minute).Unix(), 10)}}
-	q.Set("signature", s.mediaSignature(q))
-	return "http://" + s.Host + "/_media?" + q.Encode()
+	q.Set("signature", mediaSignature(q, endpoint.token))
+	return "http://" + endpoint.host + "/_media?" + q.Encode()
 }
 func (s *Server) mediaSignature(q url.Values) string {
-	mac := hmac.New(sha256.New, []byte(s.Token))
+	return mediaSignature(q, s.endpoint(nil).token)
+}
+func mediaSignature(q url.Values, token string) string {
+	mac := hmac.New(sha256.New, []byte(token))
 	for _, key := range []string{"account", "conversation", "file", "expires"} {
 		_, _ = mac.Write([]byte(key + "\x00" + q.Get(key) + "\x00"))
 	}
 	return hex.EncodeToString(mac.Sum(nil))
 }
 func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" || (s.Host != "" && r.Host != s.Host) {
+	endpoint := s.endpoint(r.Context())
+	if r.Method != "GET" || (endpoint.host != "" && r.Host != endpoint.host) {
 		http.Error(w, "media_request_denied", 403)
 		return
 	}
 	q := r.URL.Query()
 	expiration, err := strconv.ParseInt(q.Get("expires"), 10, 64)
 	now := time.Now().Unix()
-	if err != nil || expiration < now || expiration > now+301 || s.Token == "" || !hmac.Equal([]byte(q.Get("signature")), []byte(s.mediaSignature(q))) {
+	if err != nil || expiration < now || expiration > now+301 || endpoint.token == "" || !hmac.Equal([]byte(q.Get("signature")), []byte(mediaSignature(q, endpoint.token))) {
 		http.Error(w, "media_link_invalid", 403)
 		return
 	}
