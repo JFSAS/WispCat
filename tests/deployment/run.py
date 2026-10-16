@@ -23,7 +23,7 @@ from source_capture import load_checked, freeze
 from media_probe import payload,fetch,local_media_url,CORPUS,abandon
 from crash_source import StalledSource,cancellation_window
 from receipt_relay import ReceiptRelay
-from receipt_reply import parameters as receipt_parameters
+from receipt_reply import parameters as receipt_parameters, original_completion
 
 ADMIN = 'synthetic-deployment-admin-token'
 BOT = 'synthetic-deployment-onebot-token'
@@ -48,19 +48,20 @@ def wait_for(callback, processes, timeout=30):
 
 
 def run(framework,scenario='text'):
-    assert framework in ('nonebot', 'astrbot','astrbot-application') and scenario in ('text','media','large-media','crash-media','receipt-loss')
+    assert framework in ('nonebot', 'astrbot','astrbot-application') and scenario in ('text','media','large-media','crash-media','receipt-loss','runtime-crash')
     application=framework=='astrbot-application'
     crash=scenario=='crash-media'
-    loss=scenario=='receipt-loss'
+    runtime_crash=scenario=='runtime-crash'
+    loss=scenario in ('receipt-loss','runtime-crash')
     assert not (crash or loss) or framework in ('nonebot','astrbot-application')
-    large=scenario in ('large-media','crash-media','receipt-loss')
+    large=scenario in ('large-media','crash-media','receipt-loss','runtime-crash')
     os.environ['DEPLOYMENT_MEDIA_PROFILE']='large' if large else 'small'
     media_kinds=['text','image','file'] if scenario!='text' else ['text']
     cases=[(kind,media) for media in media_kinds for kind in ['private','group']]
     per_account=len(cases)
     per_round=per_account*len(ACCOUNTS)
     source, source_sha = load_checked()
-    output = ROOT/('.bin/deployment-receipt-results' if loss else '.bin/deployment-crash-results' if crash else '.bin/deployment-large-results' if large else '.bin/deployment-application-results' if application else '.bin/deployment-media-results' if scenario=='media' else '.bin/deployment-results')/(framework+'.json')
+    output = ROOT/('.bin/deployment-runtime-crash-results' if runtime_crash else '.bin/deployment-receipt-results' if loss else '.bin/deployment-crash-results' if crash else '.bin/deployment-large-results' if large else '.bin/deployment-application-results' if application else '.bin/deployment-media-results' if scenario=='media' else '.bin/deployment-results')/(framework+'.json')
     output.parent.mkdir(exist_ok=True)
     output.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix='wechat-deployment-') as directory:
@@ -123,6 +124,13 @@ def run(framework,scenario='text'):
                 assert process.returncode == 0, process.returncode
                 return result
             assert process.returncode == 0, process.returncode
+
+        def kill_owned(process):
+            assert process in processes and process.poll() is None
+            process.kill()
+            process.wait(timeout=5)
+            assert process.returncode == -signal.SIGKILL, process.returncode
+            processes.remove(process)
 
         try:
             if crash:
@@ -312,22 +320,37 @@ def run(framework,scenario='text'):
                 assert committed['id']==accepted['wechat_delivery_id'] and committed['payload_sha256']==record['sha256']
                 target=admin('/accounts/'+ACCOUNTS[0]+'/history')['cursor']
                 wait_for(lambda:next(row for row in accounts() if row['name']==ACCOUNTS[0])['connections'][0].get('cursor',0)>=target,processes)
-                kill_age=time.monotonic()-command_at
-                assert kill_age<10,'framework API may no longer be pending before the deliberate crash'
-                peer.kill();peer.wait(timeout=5);assert peer.returncode==-signal.SIGKILL
-                processes.remove(peer)
-                wait_for(lambda:not relay.snapshot()['ready_ids'] and all(row['connections'][0]['reconnects']>=1 for row in accounts()),processes)
                 row_a=next(row for row in accounts() if row['name']==ACCOUNTS[0])
                 delivery_before=request_json('http://'+row_a['onebot_address']+'/wechat_get_delivery',BOT,'POST',{'delivery_id':accepted['wechat_delivery_id']})
                 assert delivery_before['retcode']==0 and delivery_before['data']['state']=='accepted'
                 archive_before=admin('/accounts/'+ACCOUNTS[0]+'/archive')
-                compact=admin('/accounts/'+ACCOUNTS[0]+'/archive/compact','POST',{})
-                archive_after=admin('/accounts/'+ACCOUNTS[0]+'/archive')
-                assert archive_after['archive']['archived_jobs']>archive_before['archive']['archived_jobs']
-                assert all(job['id']!=accepted['wechat_delivery_id'] for job in admin('/accounts/'+ACCOUNTS[0]+'/deliveries'))
-                # The consumer has no reply. Move accepted metadata out of the
-                # active checkpoint and reopen the actual Host before retry.
-                stop(host_process)
+                active_before=admin('/accounts/'+ACCOUNTS[0]+'/deliveries')
+                assert any(job['id']==accepted['wechat_delivery_id'] for job in active_before)
+                interrupted_peer=json.loads(peer_report.read_text())
+                assert interrupted_peer['receipt_pending'] and not interrupted_peer.get('receipt_results') and not interrupted_peer.get('receipt_error')
+                if runtime_crash:
+                    api_timeout=interrupted_peer['api_timeout_seconds']
+                    assert api_timeout==(180 if application else 30),api_timeout
+                kill_age=time.monotonic()-command_at
+                assert kill_age<10,'framework API may no longer be pending before the deliberate crash'
+                kept_peer_pid=peer.pid
+                killed_host_pid=host_process.pid if runtime_crash else None
+                if runtime_crash:
+                    # Keep the actual consumer alive and kill before archival
+                    # or orderly close: only persisted native/ID state may win.
+                    kill_owned(host_process)
+                    wait_for(lambda:not relay.snapshot()['ready_ids'],processes)
+                    assert peer.poll() is None and peer.pid==kept_peer_pid
+                    compact=None
+                    archive_after=archive_before
+                else:
+                    kill_owned(peer)
+                    wait_for(lambda:not relay.snapshot()['ready_ids'] and all(row['connections'][0]['reconnects']>=1 for row in accounts()),processes)
+                    compact=admin('/accounts/'+ACCOUNTS[0]+'/archive/compact','POST',{})
+                    archive_after=admin('/accounts/'+ACCOUNTS[0]+'/archive')
+                    assert archive_after['archive']['archived_jobs']>archive_before['archive']['archived_jobs']
+                    assert all(job['id']!=accepted['wechat_delivery_id'] for job in admin('/accounts/'+ACCOUNTS[0]+'/deliveries'))
+                    stop(host_process)
                 host_process,host_log=start('host')
                 points=wait_for(addresses,processes)
                 assert request_json(points['control']+'/fixture/identity',CONTROL)['source_manifest_sha256']==source_sha
@@ -347,7 +370,10 @@ def run(framework,scenario='text'):
                 assert hashlib.sha256(asyncio.run(fetch(part['data']['url']))).hexdigest()==record['sha256']
                 assert request_json(base_b+'/wechat_get_delivery',BOT,'POST',{'delivery_id':accepted['wechat_delivery_id']})['retcode']!=0
                 assert request_json(base_b+'/wechat_get_delivery_by_request',BOT,'POST',{'wechat_request_id':record['request_id']})['retcode']!=0
-                peer_report.unlink();peer,_=start('peer')
+                if runtime_crash:
+                    assert host_process.pid!=killed_host_pid and peer.poll() is None and peer.pid==kept_peer_pid
+                else:
+                    peer_report.unlink();peer,_=start('peer')
                 wait_for(listening,processes);wait_for(connected,processes)
                 assert len(relay.snapshot()['requests'])==1,'request was retried without consumer instruction'
                 request_json(points['control']+'/fixture/inject',CONTROL,'POST',{'account':ACCOUNTS[0],'kind':'private','text':'/receipt-retry','mentioned':False})
@@ -371,9 +397,9 @@ def run(framework,scenario='text'):
                 original_lookup=request_json(base_a+'/wechat_get_delivery_by_request',BOT,'POST',{'wechat_request_id':record['request_id']})
                 assert sibling_lookup['data']['receipt']==sibling['data'] and original_lookup['data']['receipt']==accepted
                 receipt_recovery={'interrupted_stage':'accepted native receipt/public IDs persisted; OneBot response withheld before consumer',
-                    'framework_exit':-signal.SIGKILL,'command_to_kill_millis':int(kill_age*1000),'held_reply':held,'consumer_record':record,'interrupted_peer_report':interrupted_peer,
+                    'framework_exit':None if runtime_crash else -signal.SIGKILL,'runtime_exit':-signal.SIGKILL if runtime_crash else None,'command_to_kill_millis':int(kill_age*1000),'held_reply':held,'consumer_record':record,'interrupted_peer_report':interrupted_peer,
                     'original_native_commit':committed,'archive_before':archive_before,'compact_result':compact,'archive_after':archive_after,
-                    'host_reopened_before_explicit_retry':True,'active_job_removed_before_reopen':True,'delivery_before':delivery_before,'delivery_after':delivery_after,
+                    'host_reopened_before_explicit_retry':True,'active_job_removed_before_reopen':not runtime_crash,'active_jobs_before_crash':active_before,'framework_process_retained':runtime_crash,'retained_framework_pid':kept_peer_pid if runtime_crash else None,'killed_runtime_pid':killed_host_pid,'delivery_before':delivery_before,'delivery_after':delivery_after,
                     'retained_file_sha256':record['sha256'],'reopened_driver_facts_before_retry':cold,'consumer_lookup':consumer_lookup,'lookup_after_reopen':lookup_after,'consumer_retry_result':retried,'changed_content_conflict':conflict,
                     'sibling_same_key_new_receipt':sibling,'sibling_same_key_lookup':sibling_lookup,'original_lookup_after_sibling':original_lookup,'automatic_request_retries':0,'native_duplicate_submissions':0}
             elif crash:
@@ -435,7 +461,7 @@ def run(framework,scenario='text'):
                 wait_for(listening, processes)
                 change_connections(True)
                 wait_for(connected, processes)
-            after_peer = exercise('receipt_loss_recovery' if loss else 'framework_crash_reopen' if crash else 'framework_reopen', 0)
+            after_peer = exercise('runtime_crash_reopen' if runtime_crash else 'receipt_loss_recovery' if loss else 'framework_crash_reopen' if crash else 'framework_reopen', per_round*2 if runtime_crash else 0)
             if crash:
                 assert 'crash_attempt' not in json.loads(peer_report.read_text()),'transport cursor replayed the interrupted command'
                 assert len(stalled.requests)==1,'interrupted source was automatically retried'
@@ -466,11 +492,28 @@ def run(framework,scenario='text'):
             account_reenable_downloads={name:inspect(name)['synthetic_downloads'] for name in ACCOUNTS}
             assert account_reenable_downloads=={'synthetic-a':0,'synthetic-b':sibling_downloads},account_reenable_downloads
             media_references_still_readable(old_media,account_reenable_downloads)
-            after_membership = exercise('account_reenable', per_round)
+            after_membership = exercise('account_reenable', per_round*3 if runtime_crash else per_round)
             for first, after in zip(initial, after_membership):
                 assert (first['self_id'], first['user_id']) == (after['self_id'], after['user_id'])
             final_incoming_cache={name:admin('/accounts/'+name+'/media-cache') for name in ACCOUNTS}
             assert all(row['active_native_tasks']==0 for row in final_incoming_cache.values())
+            if runtime_crash:
+                # The retained consumer's original API future must reach its
+                # own bounded failure. A new successful retry cannot stand in
+                # for that task, and shutdown must not hide a pending future.
+                quiet={name:inspect(name) for name in ACCOUNTS}
+                def finished_original():
+                    return original_completion(json.loads(peer_report.read_text()).get('receipt_completions',[]),command_at,api_timeout)
+                completed=finished_original()
+                if completed is None:
+                    remaining=api_timeout+15-(time.monotonic()-command_at)
+                    assert remaining>0,'consumer exceeded the original API completion deadline'
+                    completed=wait_for(finished_original,processes,timeout=remaining)
+                assert completed['outcome']=='error',completed
+                assert all(inspect(name)==quiet[name] for name in ACCOUNTS),'failed original API call caused more native work'
+                receipt_recovery['original_send_completion']=completed
+                receipt_recovery['original_api_wait_completed_before_shutdown']=True
+                receipt_recovery['original_api_wait']={'configured_timeout_seconds':api_timeout,'command_to_completion_millis':int((completed['completed_monotonic']-command_at)*1000),'command_to_observation_millis':int((time.monotonic()-command_at)*1000),'command_deadline_seconds':api_timeout+15,'timeout_observation':'Read only actual client configuration; client future/timeout unchanged'}
             change_connections(False)
             final_peer = stop(peer, peer_kind=framework)
             stop(host_process)
@@ -499,19 +542,19 @@ def run(framework,scenario='text'):
                 'cross_account_signed_media_denied':bool(old_media),
                 'account_stop_reenable_preserved_ids': True, 'retained_sibling_worker_and_port': True,
                 'host_process_starts': starts['host'], 'framework_process_starts': starts['peer'],
-                'synthetic_replies':per_round*4, 'scenario':scenario, 'large_media_payload_bytes':CORPUS['large_payload_bytes'] if large else 0, 'synthetic_media_replies':(per_round-4)*4, 'graceful_host_shutdowns': starts['host'],
+                'synthetic_replies':per_round*4, 'scenario':scenario, 'large_media_payload_bytes':CORPUS['large_payload_bytes'] if large else 0, 'synthetic_media_replies':(per_round-4)*4, 'graceful_host_shutdowns': starts['host']-int(runtime_crash),
                 'nonebot_shutdown_hooks': ([final_peer] if crash or loss else [first_peer, final_peer]) if framework == 'nonebot' else [],
                 'astrbot_adapter_shutdowns': ([final_peer] if crash or loss else [first_peer,final_peer]) if framework in ('astrbot','astrbot-application') else [],
                 'astrbot_application_shutdowns':([final_peer] if crash or loss else [first_peer,final_peer]) if application else [],
                 'persistent_application_user_counters_verified':application,
-                'no_forced_kill_in_success_path': not (crash or loss),'deliberate_framework_crash':crash_recovery,'receipt_loss_recovery':receipt_recovery, 'no_cleanup_kill_in_success_path':True, 'real_protocol_calls': 0, 'live_wechat_or_model_requests': 0,
+                'no_forced_kill_in_success_path': not (crash or loss),'deliberate_framework_crash':crash_recovery,'receipt_loss_recovery':receipt_recovery,'runtime_crash_recovery':receipt_recovery if runtime_crash else None, 'no_cleanup_kill_in_success_path':True, 'real_protocol_calls': 0, 'live_wechat_or_model_requests': 0,
                 'runtime_fixture_binary_sha256': binary_sha,
                 'binary_snapshot':'private executable copy verified before each start and after all host runs',
                 'peer_snapshot':'private read-only peer/probe scripts and pinned committed AstrBot archive',
                 'deployment_source_path':'reports/deployment-source-'+source_sha+'.json',
                 'deployment_source_sha256':source_sha,
                 'limitations': ['Synthetic terminalization does not execute the native text transport or prove live delivery',
-                    'OneBot response is lost after a known synthetic accepted receipt; not native platform receipt loss' if loss else 'Deliberate crash interrupts source fetch before Submit, not native CDN, post-commit receipt ambiguity or runtime process crash' if crash else 'Framework reopen is graceful in this scenario',
+                    'Actual Host SIGKILL after known synthetic acceptance; consumer stays alive; not unknown native platform commit or power loss' if runtime_crash else 'OneBot response is lost after a known synthetic accepted receipt; not native platform receipt loss' if loss else 'Deliberate crash interrupts source fetch before Submit, not native CDN, post-commit receipt ambiguity or runtime process crash' if crash else 'Framework reopen is graceful in this scenario',
                     'No exactly-once consumer processing guarantee',
                     'AstrBot application uses actual InitialLoader/Core/plugin/pipeline/SQLite with providers and dashboard listener disabled; metadata endpoint points to owned loopback' if application else 'AstrBot uses its real adapter and local consumer; no full application in this scenario',
                     'CDN/profile discovery and platform exchanges are synthetic; native media workers/preparation/body encoders are exercised locally']}

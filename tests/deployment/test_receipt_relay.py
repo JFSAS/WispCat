@@ -10,7 +10,7 @@ from unittest.mock import patch
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
 
-from receipt_reply import PREFIX, enabled, parameters, request_for
+from receipt_reply import PREFIX, enabled, parameters, request_for, completion, original_completion
 from receipt_relay import ReceiptRelay, target_url
 
 
@@ -130,6 +130,34 @@ class ReceiptRelayTests(unittest.IsolatedAsyncioTestCase):
             await runtime.send(raw)
             self.assertEqual(await asyncio.wait_for(peer.recv(), 2), raw)
         self.assertFalse(self.relay.snapshot()['held_reply']['forwarded'])
+
+
+class ReceiptCompletionTests(unittest.TestCase):
+    def test_completion_keeps_time_and_error_class_without_rendering_private_cause(self):
+        class PrivateError(Exception):
+            def __str__(self):
+                raise AssertionError('private error was rendered')
+        with patch('receipt_reply.time.monotonic', return_value=125):
+            result = completion('/receipt-send', 'error', PrivateError())
+        self.assertEqual(result, {'command':'/receipt-send','outcome':'error','category':'PrivateError','completed_monotonic':125})
+
+    def test_completed_original_is_valid_even_when_observer_arrives_late(self):
+        row = {'command':'/receipt-send','outcome':'error','completed_monotonic':130}
+        with patch('receipt_reply.time.monotonic', return_value=1000):
+            self.assertEqual(original_completion([row], 100, 30), row)
+
+    def test_retry_success_cannot_replace_or_duplicate_original_completion(self):
+        retry = {'command':'/receipt-retry','outcome':'success','completed_monotonic':110}
+        self.assertIsNone(original_completion([retry], 100, 30))
+        original = {'command':'/receipt-send','outcome':'error','completed_monotonic':130}
+        self.assertEqual(original_completion([retry,original], 100, 30), original)
+        with self.assertRaises(AssertionError):
+            original_completion([original,original], 100, 30)
+
+    def test_original_success_and_invalid_completion_times_are_rejected(self):
+        for outcome, finished in [('success',130),('error',99),('error',145.001),('error',float('nan')),('error',float('inf')),('error',True)]:
+            with self.subTest(outcome=outcome, finished=finished), self.assertRaises(AssertionError):
+                original_completion([{'command':'/receipt-send','outcome':outcome,'completed_monotonic':finished}],100,30)
 
 
 if __name__ == '__main__':

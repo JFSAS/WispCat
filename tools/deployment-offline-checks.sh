@@ -7,12 +7,12 @@ python="${DEPLOYMENT_PYTHON:-.bin/deployment-env/bin/python}"
 test -x "$python" || { echo 'Prepare the isolated deployment environment first.' >&2; exit 1; }
 mkdir -p .bin
 deployment_scenario=text
-case "${1:-}" in --media) deployment_scenario=media; shift ;; --large-media) deployment_scenario=large-media; shift ;; --crash-media) deployment_scenario=crash-media; shift ;; --receipt-loss) deployment_scenario=receipt-loss; shift ;; esac
+case "${1:-}" in --media) deployment_scenario=media; shift ;; --large-media) deployment_scenario=large-media; shift ;; --crash-media) deployment_scenario=crash-media; shift ;; --receipt-loss) deployment_scenario=receipt-loss; shift ;; --runtime-crash) deployment_scenario=runtime-crash; shift ;; esac
 deployment_source_sha="$("$python" tests/deployment/source_capture.py)"
 sh tools/go.sh build -race -tags integrationfixtures -trimpath -ldflags "-X main.deploymentSourceSHA=$deployment_source_sha" -o .bin/deployment-fixture ./tests/deployment/fixture
 "$python" tests/deployment/source_capture.py --check
 if [ "$#" -eq 0 ]; then
-  case "$deployment_scenario" in crash-media|receipt-loss) set -- nonebot astrbot-application ;; *) set -- nonebot astrbot ;; esac
+  case "$deployment_scenario" in crash-media|receipt-loss|runtime-crash) set -- nonebot astrbot-application ;; *) set -- nonebot astrbot ;; esac
 fi
 for framework do
   case "$framework" in nonebot|astrbot|astrbot-application) ;; *) echo 'Unknown deployment peer.' >&2; exit 1 ;; esac
@@ -22,7 +22,7 @@ for framework do
       if [ "$deployment_scenario" = crash-media ]; then
         sandbox-exec -p '(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:*"))' "$python" -m unittest discover -s tests/deployment -p test_crash_probe.py
       fi
-      if [ "$deployment_scenario" = receipt-loss ]; then
+      if [ "$deployment_scenario" = receipt-loss ] || [ "$deployment_scenario" = runtime-crash ]; then
         sandbox-exec -p '(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:*"))' "$python" -m unittest discover -s tests/deployment -p test_receipt_relay.py
       fi
       if [ "$framework" = astrbot-application ]; then
@@ -35,7 +35,7 @@ for framework do
       if [ "$deployment_scenario" = crash-media ]; then
         "$python" -m unittest discover -s tests/deployment -p test_crash_probe.py
       fi
-      if [ "$deployment_scenario" = receipt-loss ]; then
+      if [ "$deployment_scenario" = receipt-loss ] || [ "$deployment_scenario" = runtime-crash ]; then
         "$python" -m unittest discover -s tests/deployment -p test_receipt_relay.py
       fi
       if [ "$framework" = astrbot-application ]; then

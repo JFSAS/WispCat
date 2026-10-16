@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import secrets
 import stat
+import time
 
 from media_probe import label_from_sender, payload
 
@@ -56,3 +57,24 @@ def request_for(text, self_id, user_id, sender):
     assert record['schema'] == 1 and record['request_id'].startswith(PREFIX)
     assert (record['self_id'], record['user_id'], record['label']) == (int(self_id), int(user_id), label)
     return parameters(record), {**record, 'record_sha256': hashlib.sha256(raw).hexdigest()}
+
+
+def completion(command, outcome, error=None):
+    assert command in ('/receipt-send', '/receipt-retry')
+    assert outcome in ('success', 'error') and (error is not None) == (outcome == 'error')
+    value = {'command': command, 'outcome': outcome, 'completed_monotonic': time.monotonic()}
+    if error is not None:
+        value['category'] = type(error).__name__
+    return value
+
+
+def original_completion(rows, command_at, api_timeout):
+    matches = [row for row in rows if row['command'] == '/receipt-send']
+    if not matches:
+        return None
+    assert len(matches) == 1, 'duplicate original API completion'
+    value = matches[0]
+    assert value['outcome'] == 'error', 'withheld original reply reported success'
+    finished = value['completed_monotonic']
+    assert type(finished) in (int, float) and 0 <= finished-command_at <= api_timeout+15, 'original API completed outside its own deadline'
+    return value

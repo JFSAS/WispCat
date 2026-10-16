@@ -86,7 +86,9 @@ async def main():
         assert len(core.provider_manager.provider_insts)==0
         stages=[[type(stage).__name__ for stage in scheduler.stages] for scheduler in core.pipeline_scheduler_mapping.values()]
         assert stages and all(len(names)==9 for names in stages),stages
-        value=read_report();value.update(application_initialized=True,pipeline_stages=stages,metrics_disabled=True,providers_configured=0,dashboard_listener_started=False);write_report(value)
+        adapter=next(item for item in core.platform_manager.get_insts() if item.meta().name=='aiocqhttp')
+        api_timeout=adapter.bot._api._wsr_api._timeout_sec
+        value=read_report();value.update(application_initialized=True,pipeline_stages=stages,metrics_disabled=True,providers_configured=0,dashboard_listener_started=False,api_timeout_seconds=api_timeout);write_report(value)
         waiter=asyncio.create_task(stopping.wait())
         finished,_=await asyncio.wait([application,waiter],return_when=asyncio.FIRST_COMPLETED)
         if application in finished:await application;raise RuntimeError('application exited before shutdown')

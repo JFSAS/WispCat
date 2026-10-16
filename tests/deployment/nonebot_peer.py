@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'framework'))
 from stream_probe import probe
 from media_probe import probe as media_probe
 from crash_reply import source_for
-from receipt_reply import enabled as receipt_enabled,request_for as receipt_request
+from receipt_reply import enabled as receipt_enabled,request_for as receipt_request,completion as receipt_completion
 
 report = Path(os.environ['FRAMEWORK_REPORT'])
 nonebot.init(driver='~fastapi', host='127.0.0.1', port=int(os.environ['FRAMEWORK_PORT']),
@@ -23,6 +23,7 @@ nonebot.init(driver='~fastapi', host='127.0.0.1', port=int(os.environ['FRAMEWORK
 driver = nonebot.get_driver()
 driver.register_adapter(Adapter)
 state = {'framework': 'nonebot', 'startup': False, 'shutdown': False,
+         'api_timeout_seconds': float(driver.config.api_timeout),
          'connected': [], 'disconnected': [], 'handled': [],
          'versions': {name: importlib.metadata.version(name) for name in
                       ['nonebot2', 'nonebot-adapter-onebot', 'fastapi', 'pydantic']}}
@@ -91,9 +92,11 @@ async def reply(bot: Bot, event: MessageEvent):
                 save()
             result=await bot.call_api('send_private_msg',**params)
         except Exception as error:
-            state['receipt_pending']=False;state['receipt_error']=type(error).__name__;save()
+            state['receipt_pending']=False;state['receipt_error']=type(error).__name__
+            state.setdefault('receipt_completions',[]).append(receipt_completion(text,'error',error));save()
             raise
         state['receipt_pending']=False
+        state.setdefault('receipt_completions',[]).append(receipt_completion(text,'success'))
         state.setdefault('receipt_results',[]).append({'command':text,'record':record,'result':result})
         save()
         return

@@ -11,7 +11,7 @@ from media_probe import local_media_url,payload,label_from_sender
 from stream_probe import probe
 from application_report import read_report,write_report
 from crash_reply import source_for
-from receipt_reply import enabled as receipt_enabled,request_for as receipt_request
+from receipt_reply import enabled as receipt_enabled,request_for as receipt_request,completion as receipt_completion
 
 
 class Main(star.Star):
@@ -51,9 +51,11 @@ class Main(star.Star):
                     value=read_report();value['receipt_lookup']=lookup;write_report(value)
                 result=await adapter.bot.send_private_msg(**params)
             except Exception as error:
-                value=read_report();value['receipt_pending']=False;value['receipt_error']=type(error).__name__;write_report(value)
+                value=read_report();value['receipt_pending']=False;value['receipt_error']=type(error).__name__
+                value.setdefault('receipt_completions',[]).append(receipt_completion(text,'error',error));write_report(value)
                 raise
-            value=read_report();value['receipt_pending']=False;value.setdefault('receipt_results',[]).append({'command':text,'record':record,'result':result});write_report(value)
+            value=read_report();value['receipt_pending']=False;value.setdefault('receipt_results',[]).append({'command':text,'record':record,'result':result})
+            value.setdefault('receipt_completions',[]).append(receipt_completion(text,'success'));write_report(value)
             return
         if crash_source:
             value=read_report();value['crash_attempt']={'self_id':int(message.self_id),'user_id':int(event.get_sender_id()),'received_message_id':int(message.message_id)};write_report(value)
