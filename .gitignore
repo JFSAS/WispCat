@@ -12,3 +12,5 @@ __pycache__/
 
 /reports/
 *.wxlogin
+
+node_modules/

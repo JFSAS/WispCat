@@ -103,9 +103,6 @@ func TestManagementCredentialUploadQueuesOnlySelectedAccount(t *testing.T) {
 			t.Fatal("HTTP handler performed protocol work")
 		}
 	}
-	if !strings.Contains(managementPage, "login/import") || !strings.Contains(managementPage, "FormData()") || !strings.Contains(managementPage, "上传凭证登录") {
-		t.Fatal("upload UI missing")
-	}
 }
 
 func TestCredentialMultipartRejectsMissingFieldsAndTrailingOversize(t *testing.T) {

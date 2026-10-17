@@ -1,9 +1,17 @@
+FROM node:24-bookworm-slim AS webui
+WORKDIR /build/webui
+COPY webui/package.json webui/package-lock.json ./
+RUN npm ci
+COPY webui/ ./
+RUN npm run build
+
 FROM golang:1.25-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends libssl-dev libsqlite3-dev pkg-config && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+COPY --from=webui /build/internal/host/web/dist ./internal/host/web/dist
 RUN CGO_ENABLED=1 go build -trimpath -o /out/wispcat ./cmd/wispcat
 
 FROM debian:bookworm-slim
