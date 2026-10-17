@@ -139,16 +139,18 @@ Dockerfile 使用非 root 用户，入口为 `wispcat`，配置路径为 `/confi
 
 `wispcat-credentials` 复用协议来源项目的磁盘读取、安装指纹和完整性校验，
 目前支持已核实的微信 **4.1.13（269602）**。工具只生成加密文件，不连接微信。
-在 Mac 默认 zsh 中执行：
+使用 macOS 发行包时，在解压后的目录用默认 zsh 执行：
 
 ```zsh
-sh tools/go.sh build -o .bin/wispcat-credentials ./cmd/wispcat-credentials
 read -rs 'WISPCAT_CREDENTIAL_PASSPHRASE?导出密码（至少16字节）：'
 echo
 export WISPCAT_CREDENTIAL_PASSPHRASE
-./.bin/wispcat-credentials --app /Applications/WeChat.app --out ~/Desktop/wispcat-login.wxlogin
+./wispcat-credentials --app /Applications/WeChat.app --out ~/Desktop/wispcat-login.wxlogin
 unset WISPCAT_CREDENTIAL_PASSPHRASE
 ```
+
+从源码运行时，先执行 `sh tools/go.sh build -o .bin/wispcat-credentials ./cmd/wispcat-credentials`，
+再将上方的 `./wispcat-credentials` 换为 `./.bin/wispcat-credentials`。
 
 其他微信安装可修改 `--app`；`--passphrase-env` 可指定密码环境变量。
 输出文件权限为 `0600`，拒绝覆盖同名文件。文件最多 1 MiB，使用 AES-256-GCM 加密，
