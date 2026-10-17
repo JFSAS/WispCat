@@ -2,6 +2,8 @@
 
 <p align="center">独立微信协议运行时 · OneBot v11 · WebUI · Go SDK · MCP · Alpha 开发预览</p>
 <p align="center">
+  <a href="#下载发行包">下载</a> ·
+  <a href="#管理界面">界面预览</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#登录与凭证迁移">登录与凭证迁移</a> ·
   <a href="#接入机器人">接入机器人</a> ·
@@ -32,7 +34,7 @@ WispCat 将微信协议与机器人业务分开：由独立进程维护账号、
                        └→ Go SDK / MCP
 ```
 
-**当前版本为 `0.1.0-alpha.1`（Alpha 开发预览）。** 已完成 macOS／Linux 的离线检查，并在 Linux 上验证过缓存恢复登录、
+**当前版本为 `0.1.0-alpha.2`（Alpha 开发预览）。** 已完成 macOS／Linux 的离线检查，并在 Linux 上验证过缓存恢复登录、
 消息同步和 AstrBot 对接。开发检查使用合成账号与回环服务；这些结果不代表长期稳定性、
 全部微信功能或完整 OneBot 标准均已验证。
 
@@ -41,7 +43,60 @@ WispCat 将微信协议与机器人业务分开：由独立进程维护账号、
 不支持的操作会明确拒绝。图片传输与模型识图是两层能力，实际效果还取决于下游框架和模型；
 真实微信图片到模型再回复的完整链路尚未完成验收。
 
+## 管理界面
+
+截图来自内置演示模式，账号、连接、统计均为示例数据，不含真实登录凭证或聊天记录。点击图片可查看大图。
+
+| 运行概览 | 登录管理 |
+| --- | --- |
+| [![账号与连接状态概览](assets/readme/overview.jpg)](assets/readme/overview.jpg) | [![加密凭证文件与二维码登录](assets/readme/login.jpg)](assets/readme/login.jpg) |
+| **机器人连接表单** | **存储维护与深色主题** |
+| [![AstrBot 和 NoneBot 连接表单](assets/readme/connections.jpg)](assets/readme/connections.jpg) | [![深色主题下的存储维护面板](assets/readme/storage-dark.jpg)](assets/readme/storage-dark.jpg) |
+
 ## 快速开始
+
+### 下载发行包
+
+从 [Releases](https://github.com/JFSAS/WispCat/releases) 下载匹配系统和 CPU 架构的包。
+当前可执行发行版为 `v0.1.0-alpha.2`；Windows 暂不提供。
+
+| 系统与架构 | 下载 | 运行要求 |
+| --- | --- | --- |
+| macOS Apple Silicon（M1 / M2 / M3 / M4 等） | [darwin_arm64.tar.gz](https://github.com/JFSAS/WispCat/releases/download/v0.1.0-alpha.2/wispcat_v0.1.0-alpha.2_darwin_arm64.tar.gz) | macOS 15+ |
+| macOS Intel | [darwin_amd64.tar.gz](https://github.com/JFSAS/WispCat/releases/download/v0.1.0-alpha.2/wispcat_v0.1.0-alpha.2_darwin_amd64.tar.gz) | macOS 15+ |
+| Linux x64（`x86_64`） | [linux_amd64.tar.gz](https://github.com/JFSAS/WispCat/releases/download/v0.1.0-alpha.2/wispcat_v0.1.0-alpha.2_linux_amd64.tar.gz) | glibc 2.35+，如 Ubuntu 22.04 / Debian 12 及更新版本 |
+| Linux ARM64（`aarch64`） | [linux_arm64.tar.gz](https://github.com/JFSAS/WispCat/releases/download/v0.1.0-alpha.2/wispcat_v0.1.0-alpha.2_linux_arm64.tar.gz) | glibc 2.35+ |
+
+下载同版 [SHA256SUMS](https://github.com/JFSAS/WispCat/releases/download/v0.1.0-alpha.2/SHA256SUMS)，
+在下载目录按文件名选择对应行，再校验。以下以 Apple Silicon 包为例；替换为你实际下载的文件名，
+Linux 将 `shasum -a 256 -c -` 换为 `sha256sum -c -`：
+
+```sh
+grep 'wispcat_v0.1.0-alpha.2_darwin_arm64.tar.gz$' SHA256SUMS | shasum -a 256 -c -
+```
+
+对应文件应显示 `OK`。
+
+解压后进入包内目录，保持可执行文件与 `lib/` 在同一目录层级。发行包内置管理前端和 OpenSSL；
+Linux 包另带 SQLite，macOS 使用系统 SQLite。运行时无需安装 Go、Node.js、Homebrew 或开发库。
+macOS 文件使用 ad-hoc 签名，尚未 Apple 公证；首次运行可能需要按系统安全提示由用户确认。
+
+```sh
+# 在解压得到的目录中执行
+cp wispcat.example.json wispcat.local.json
+export WISPCAT_ADMIN_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+export WISPCAT_ONEBOT_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+export WISPCAT_BOT_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+./wispcat check --config wispcat.local.json
+printf '管理令牌：%s\n' "$WISPCAT_ADMIN_TOKEN"
+./wispcat serve --config wispcat.local.json
+```
+
+打开 `http://127.0.0.1:5099/`，输入上方管理令牌。默认示例账号为离线状态；
+将令牌保存到你的私有启动环境，配置下游时同步对应令牌。
+macOS 包另含 `wispcat-credentials`，可按下方说明提取 Mac 凭证；Linux 通过管理页上传加密文件登录。
+
+### 从源码构建
 
 需要 Go 1.25+、C 编译器、OpenSSL 3 和 SQLite 3 的开发库。
 macOS 的构建脚本使用 Homebrew `openssl@3`；Linux 还需准备 `pkg-config`。
@@ -212,6 +267,14 @@ sh tools/deployment-offline-checks.sh --media nonebot
 依赖环境、执行结果和临时文件放在被 Git 忽略的 `.bin/` 中；真实令牌、凭证、状态目录和聊天数据不得入库。
 协议来源、冻结基线和允许的服务层插入记录保留在 [`provenance/`](provenance/)。
 更名保留旧缓存的加密域与格式标识，以便继续读取已有登录及历史；旧配置可通过 `--config` 显式指定。
+
+### 发行工作流
+
+[Release executables](.github/workflows/release.yml) 在 `v*` 标签推送后自动运行，也支持手动执行。
+手动运行时 `publish=false` 会从所选工作流提交构建预览 Artifact；`publish=true` 要求已存在并匹配的标签。
+四个架构均原生构建；解压验证包括动态库依赖、OpenSSL 证书验证、实际离线启动和 MCP 初始化。
+发布前还要求相同提交的 Alpha checks 通过，四个包与校验值先上传草稿，再一起公开。
+已发布资产不会被自动覆盖；更新程序应创建新版本标签。
 
 ## 授权与免责声明
 
