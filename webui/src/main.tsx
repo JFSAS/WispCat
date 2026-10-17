@@ -499,7 +499,7 @@ function App() {
                   <span className="dot" />{" "}
                   {demo ? "本地演示" : stale ? "连接中断" : "管理控制台"}
                 </span>
-                <span>v0.1.0-alpha.1</span>
+                <span>v0.1.0-alpha.2</span>
               </div>
             </div>
           </aside>

@@ -518,7 +518,7 @@ export function Settings() {
         </Card>
       </div>
       <BulkConfiguration key={s.configuration.revision} />
-      <Notice title="WispCat · 0.1.0-alpha.1">
+      <Notice title="WispCat · 0.1.0-alpha.2">
         本项目为非官方学习研究项目。协议变化可能影响连接与账号安全，请使用已授权的账号并妥善保管凭证。
       </Notice>
     </div>

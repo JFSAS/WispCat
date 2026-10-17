@@ -55,7 +55,7 @@ func (s *Server) handle(ctx context.Context, q request) (any, error) {
 		if p.Protocol == "2025-03-26" || p.Protocol == "2025-06-18" {
 			version = p.Protocol
 		}
-		return map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}, "resources": map[string]any{}}, "serverInfo": map[string]string{"name": "wispcat-mcp", "version": "0.1.0-alpha.1"}}, nil
+		return map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}, "resources": map[string]any{}}, "serverInfo": map[string]string{"name": "wispcat-mcp", "version": "0.1.0-alpha.2"}}, nil
 	case "ping":
 		return map[string]any{}, nil
 	case "tools/list":

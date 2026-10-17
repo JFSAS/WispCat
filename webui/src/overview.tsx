@@ -92,7 +92,7 @@ export function Overview() {
         <Stat
           label="运行时版本"
           value="0.1.0"
-          unit="alpha.1"
+          unit="alpha.2"
           note="OneBot v11 · 微信协议运行时"
           icon="server"
           tone="amber"

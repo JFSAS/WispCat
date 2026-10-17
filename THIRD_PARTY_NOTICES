@@ -9,7 +9,12 @@ are included verbatim in internal/host/web/dist/THIRD_PARTY_NOTICES.txt and
 embedded in the executable at /third-party-notices. Frontend build-only
 dependencies retain the licenses in their npm packages.
 
-Native system dependencies are obtained separately by the build/deployment:
+Source builds obtain native dependencies separately. Official executable
+bundles include OpenSSL, and Linux bundles also include SQLite. Their full
+license/copyright texts are included in each bundle's licenses/ directory;
+macOS continues to use the SQLite library supplied by the operating system.
+
+Native dependency references:
 - OpenSSL 3: Apache License 2.0, https://openssl-library.org/source/license/
 - SQLite 3: public domain dedication, https://www.sqlite.org/copyright.html
 - Go standard library: BSD-style license, https://go.dev/LICENSE

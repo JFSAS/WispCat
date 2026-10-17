@@ -20,6 +20,7 @@ run_offline() {
 
 python3 tools/check_baseline.py
 python3 tools/test-baseline-checker.py
+python3 tools/test-release.py
 run_offline sh tools/go.sh test -run '^$' ./...
 run_offline sh tools/go.sh test -count=1 \
   ./cmd/wispcat-credentials ./internal/credentials ./internal/host \
