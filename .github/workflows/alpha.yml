@@ -1,0 +1,58 @@
+name: Alpha checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alpha-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  alpha:
+    name: Build and offline regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: go.sum
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libssl-dev libsqlite3-dev pkg-config iproute2
+      - name: Prepare pinned dependencies
+        run: |
+          npm ci --prefix webui
+          go mod download
+      - name: Check and build the management UI
+        run: |
+          npm test --prefix webui
+          npm run build --prefix webui
+          git diff --exit-code -- internal/host/web/dist
+      - name: Run Go checks without external network access
+        shell: bash
+        run: |
+          sudo unshare --net -- sh -c '
+            ip link set lo up
+            exec runuser -u "$1" -- env PATH="$2" sh tools/alpha-checks.sh
+          ' sh "$(id -un)" "$PATH"
+      - name: Check working tree
+        run: git diff --exit-code

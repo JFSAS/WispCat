@@ -157,7 +157,7 @@ func (r *Runtime) invoke(ctx context.Context, q Request, sink func(any) error) R
 		}
 	}
 	if q.Action == "get_version_info" {
-		return good(map[string]any{"app_name": "WispCat", "app_version": "0.1.0-dev", "protocol_version": "v11", "platform": "wechat"})
+		return good(map[string]any{"app_name": "WispCat", "app_version": "0.1.0-alpha.1", "protocol_version": "v11", "platform": "wechat"})
 	}
 	if q.Action == "get_status" {
 		return good(map[string]any{"online": snap.Online, "good": snap.Online, "wechat_state": snap.State})

@@ -14,6 +14,14 @@ Native system dependencies are obtained separately by the build/deployment:
 - SQLite 3: public domain dedication, https://www.sqlite.org/copyright.html
 - Go standard library: BSD-style license, https://go.dev/LICENSE
 
+Optional external framework integration:
+- AstrBot 4.29.0: GNU AGPL 3.0,
+  https://github.com/AstrBotDevs/AstrBot/blob/v4.29.0/LICENSE
+  The integration installer targets a separately obtained AstrBot source tree.
+  Keep that tree's existing copyright and license files. Distribution or
+  deployment of a modified AstrBot tree remains subject to its applicable
+  license obligations; the WispCat license does not replace those terms.
+
 This repository does not grant rights to third-party trademarks or to the
 WeChat client. The above references do not imply endorsement or affiliation.
 

@@ -1,6 +1,6 @@
 <h1 align="center">WispCat</h1>
 
-<p align="center">独立微信协议运行时 · OneBot v11 · WebUI · Go SDK · MCP</p>
+<p align="center">独立微信协议运行时 · OneBot v11 · WebUI · Go SDK · MCP · Alpha 开发预览</p>
 <p align="center">
   <a href="#快速开始">快速开始</a> ·
   <a href="#登录与凭证迁移">登录与凭证迁移</a> ·
@@ -32,7 +32,7 @@ WispCat 将微信协议与机器人业务分开：由独立进程维护账号、
                        └→ Go SDK / MCP
 ```
 
-**当前版本为 `0.1.0-dev`。** 已完成 macOS／Linux 的离线检查，并在 Linux 上验证过缓存恢复登录、
+**当前版本为 `0.1.0-alpha.1`（Alpha 开发预览）。** 已完成 macOS／Linux 的离线检查，并在 Linux 上验证过缓存恢复登录、
 消息同步和 AstrBot 对接。开发检查使用合成账号与回环服务；这些结果不代表长期稳定性、
 全部微信功能或完整 OneBot 标准均已验证。
 
@@ -45,7 +45,12 @@ WispCat 将微信协议与机器人业务分开：由独立进程维护账号、
 
 需要 Go 1.25+、C 编译器、OpenSSL 3 和 SQLite 3 的开发库。
 macOS 的构建脚本使用 Homebrew `openssl@3`；Linux 还需准备 `pkg-config`。
-当前从源码构建：
+从仓库获取本版源码后构建：
+
+```sh
+git clone https://github.com/JFSAS/WispCat.git
+cd WispCat
+```
 
 ```sh
 sh tools/go.sh build -o .bin/wispcat ./cmd/wispcat
@@ -61,7 +66,8 @@ export WISPCAT_BOT_TOKEN="$(openssl rand -hex 32)"
 ```
 
 示例管理页为 `http://127.0.0.1:5099/`，OneBot 为 `http://127.0.0.1:5700`。
-在管理页输入 `WISPCAT_ADMIN_TOKEN` 的值后刷新账号；令牌需在私有环境中妥善保存，
+在管理页输入 `WISPCAT_ADMIN_TOKEN` 的值，点击“进入控制台”。管理令牌相当于后台访问密码，
+与微信登录凭证不同；令牌需在私有环境中妥善保存，
 重新生成或更换令牌时应同步调整消费者配置。
 
 示例账号默认 `offline`。连接微信前，先配置实际账号实例及登录凭证，再明确设为 `online`；
@@ -101,8 +107,8 @@ unset WISPCAT_CREDENTIAL_PASSPHRASE
 ssh -N -L 127.0.0.1:5099:127.0.0.1:5099 user@linux-host
 ```
 
-在 Mac 打开 `http://127.0.0.1:5099/`，输入管理令牌并刷新账号，在目标账号的
-“从 Mac 凭证文件登录”中选择 `.wxlogin` 文件，输入导出密码，点击“上传凭证登录”。
+在 Mac 打开 `http://127.0.0.1:5099/`，输入管理令牌进入控制台，在“登录管理”中选择目标账号，
+通过“凭证文件登录”选择 `.wxlogin` 文件，输入导出密码，点击“上传凭证登录”。
 转发两端使用相同端口，浏览器地址使用 `127.0.0.1`，以通过管理接口的 Host 校验。
 
 上传成功表示请求已接受；完成微信鉴权与首次同步后才显示“已连接”。失败时显示错误类别，
@@ -163,13 +169,35 @@ Go 模块路径为 `github.com/JFSAS/wispcat`。
 
 ## 管理与开发
 
+管理页面使用 React + TypeScript + Vite，提供账号状态面板、登录引导与连接表单；构建产物通过 Go `embed` 内嵌，运行时不需要 Node.js。
 管理页面和管理 API 使用独立管理令牌，配置保存与应用分开。
 `/accounts`、`/storage` 提供账号与存储状态；`/configuration` 保存整份期望配置，
 各设置的 `/apply` 端点负责应用。整份持久化不等于统一热激活或失败回滚。
 凭证上传端点为 `POST /accounts/<name>/login/import`，multipart 字段为 `file` 与 `passphrase`，
 接受后返回 202，通过账号状态查看实际鉴权结果。
 
-依赖准备完成后，可按改动范围执行离线检查：
+仓库包含可直接用于 Go 构建的前端产物。界面开发需要 Node.js 24+。修改界面后，在 `webui/` 中执行 `npm ci`、`npm run build`，再重新构建 Go 程序；`npm run dev` 可用 `?demo=1` 进行独立界面开发。演示模式仅使用浏览器内的示例数据，不调用微信或管理 API。
+
+首版验收范围固定为：构建与离线启动、账号登录与缓存恢复、文本收发、群聊 @ 处理、
+OneBot／AstrBot 对接及管理表单。真实账号的在线验收与离线 CI 分开；CI 不登录微信、
+不调用模型、不需要真实凭证，也不代表全部兼容性已验证。
+
+GitHub Actions 的最小检查会重建前端并检查产物一致性，编译全部 Go 包、运行重点回归，
+再用两个合成离线账号验证实际程序的启动与正常退出。依赖先在联网阶段准备，Go 回归在
+仅允许回环网络的环境中执行。
+
+依赖准备完成后，macOS 可执行与 CI 同范围的检查：
+
+```sh
+npm ci --prefix webui
+npm test --prefix webui
+npm run build --prefix webui
+go mod download
+sh tools/alpha-checks.sh
+```
+
+Linux 执行 `tools/alpha-checks.sh` 前需进入仅有已启用回环接口的网络命名空间，
+可参考 [CI 工作流](.github/workflows/alpha.yml)。按具体改动需要，还可运行：
 
 ```sh
 sh tools/offline-checks.sh
@@ -187,7 +215,7 @@ sh tools/deployment-offline-checks.sh --media nonebot
 
 ## 授权与免责声明
 
-- **用途与授权**：本仓库仅供学习与研究。未经仓库主作者明确授权，禁止任何项目基于 WispCat 的原创代码进行开发。本声明仅适用于作者有权授权的代码；第三方依赖、引用内容及其他权利人的代码，仍遵循各自许可与权利声明。本仓库未采用 MIT、Apache 等开放源代码许可证，公开源码不表示允许任意使用或二次开发。
+- **用途与授权**：本仓库仅供学习与研究。未经仓库主作者明确授权，禁止任何项目基于 WispCat 的原创代码进行开发。本声明仅适用于作者有权授权的代码；第三方依赖、引用内容及其他权利人的代码，仍遵循各自许可与权利声明。完整条款见 [LICENSE](LICENSE)，第三方版权与许可见 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)。本项目采用源码可见、受限授权，公开源码不表示允许任意使用或二次开发。
 - **合法使用**：仅处理本人或已获得充分授权的账号与数据，并遵守适用法律法规和相关平台规则。禁止用于骚扰、垃圾消息、诈骗、未经授权的数据收集或其他违法违规活动。违法违规使用及传播违规使用教程所产生的责任，由相关行为人依法承担。
 - **非官方关系**：本项目未获腾讯或微信官方授权、认可或背书。微信及相关名称、商标的权利归各自权利人所有。
 - **账号与运行风险**：协议或客户端升级可能导致登录失败、会话失效、功能中断、消息丢失，以及账号限制或封禁。项目按现状提供，在法律允许范围内不对账号安全、持续可用、特定用途适用性或完整兼容性作保证。
