@@ -98,7 +98,8 @@ def linux_dependencies(path, env):
     result = subprocess.run(['ldd', str(path)], env=env, text=True, capture_output=True)
     if result.returncode and 'not a dynamic executable' in result.stdout+result.stderr:
         return {}
-    result.check_returncode()
+    if result.returncode:
+        raise RuntimeError(f'ldd failed for {path}:\n{result.stdout}{result.stderr}')
     assert 'not found' not in result.stdout, 'unresolved Linux runtime dependency'
     entries = {}
     for line in result.stdout.splitlines():
@@ -109,7 +110,10 @@ def linux_dependencies(path, env):
 
 
 def relocate_linux(path, library, env):
-    if linux_dependencies(path, env):
+    # Go executables such as the MCP bridge may need only glibc. Rewriting
+    # their ELF layout adds no useful search path and can break Go binaries
+    # with older patchelf versions supplied by the minimum supported distro.
+    if linux_dependencies(path, env).keys() - SYSTEM_LINUX:
         run('patchelf', '--set-rpath', '$ORIGIN' if library else '$ORIGIN/lib', path)
 
 

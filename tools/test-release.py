@@ -4,6 +4,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('release', Path(__file__).with_name('release.py'))
 release = importlib.util.module_from_spec(spec)
@@ -11,6 +12,19 @@ spec.loader.exec_module(release)
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_linux_relocation_preserves_system_only_go_executables(self):
+        with patch.object(release, 'linux_dependencies') as dependencies, patch.object(release, 'run') as run:
+            for resolved in [{}, {'libc.so.6': Path('/lib/libc.so.6')}]:
+                dependencies.return_value = resolved
+                release.relocate_linux(Path('wispcat-mcp'), False, {})
+                run.assert_not_called()
+            dependencies.return_value = {'libssl.so.3': Path('/lib/libssl.so.3')}
+            release.relocate_linux(Path('wispcat'), False, {})
+            run.assert_called_once_with('patchelf', '--set-rpath', '$ORIGIN/lib', Path('wispcat'))
+            run.reset_mock()
+            release.relocate_linux(Path('libssl.so.3'), True, {})
+            run.assert_called_once_with('patchelf', '--set-rpath', '$ORIGIN', Path('libssl.so.3'))
+
     def test_tag_and_architecture_validation(self):
         self.assertEqual(len(release.TARGETS), 4)
         for bad in ['main', 'v1.0.0;echo unsafe', 'v1.0.0\n', '../v1.0.0']:
