@@ -19,8 +19,8 @@ go test -race -count=1 -json ./... > .bin/linux-go-test.jsonl
 python3 tools/report-go-tests.py .bin/linux-go-test.jsonl --report .bin/linux-test-summary.json
 go vet ./...
 mkdir -p .bin
-go build -trimpath -o .bin/wechat-runtime ./cmd/wechat-runtime
-go build -trimpath -o .bin/wechat-mcp ./cmd/wechat-mcp
-go version -m .bin/wechat-runtime
-ldd .bin/wechat-runtime
-python3 tools/offline-process-smoke.py --binary .bin/wechat-runtime --report .bin/linux-process-smoke.json
+go build -trimpath -o .bin/wispcat ./cmd/wispcat
+go build -trimpath -o .bin/wispcat-mcp ./cmd/wispcat-mcp
+go version -m .bin/wispcat
+ldd .bin/wispcat
+python3 tools/offline-process-smoke.py --binary .bin/wispcat --report .bin/linux-process-smoke.json

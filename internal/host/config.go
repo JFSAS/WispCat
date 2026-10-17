@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JFSAS/wechat-runtime/internal/instances"
+	"github.com/JFSAS/wispcat/internal/instances"
 )
 
 type Reverse struct {

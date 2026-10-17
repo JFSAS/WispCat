@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/media"
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/internal/media"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 func deploymentMediaService(t *testing.T, directory string) (BotAdapter, *DeploymentDriver, func()) {

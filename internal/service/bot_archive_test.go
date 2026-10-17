@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JFSAS/wechat-runtime/internal/cdn"
-	"github.com/JFSAS/wechat-runtime/internal/messaging"
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
-	"github.com/JFSAS/wechat-runtime/internal/store"
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/internal/cdn"
+	"github.com/JFSAS/wispcat/internal/messaging"
+	"github.com/JFSAS/wispcat/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/store"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 func archiveFixture(t *testing.T) (BotAdapter, bot.Send) {

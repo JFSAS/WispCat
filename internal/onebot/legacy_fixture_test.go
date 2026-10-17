@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 // This writer is test-only: it produces the previous released snapshot format

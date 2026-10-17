@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/cdn"
-	"github.com/JFSAS/wechat-runtime/internal/media"
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/cdn"
+	"github.com/JFSAS/wispcat/internal/media"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 const MaxMediaJobs = 512

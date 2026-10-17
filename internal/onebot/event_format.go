@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 func escapeCQ(value string, parameter bool) string {

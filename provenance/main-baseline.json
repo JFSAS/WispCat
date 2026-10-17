@@ -3,11 +3,11 @@
   "ref": "main",
   "commit": "1a22fc6130e96fb14c771996e6a78d04e56fdd01",
   "module_before": "github.com/JFSAS/wechat-protocol-lab",
-  "module_after": "github.com/JFSAS/wechat-runtime",
+  "module_after": "github.com/JFSAS/wispcat",
   "files": {
     "internal/account/account.go": {
       "source_sha256": "0d6de55c5cab2d9ed10496f29281137269ec82cc724b66b52477b6a11ccbba4f",
-      "imported_sha256": "e2bb7d6063486282e701cb48a5de6844c285393abea96922b114f215673e7501"
+      "imported_sha256": "3660fc5c5eef7fa1d8e39f6831676ded5506daa04c82bcd43aa46773c57d7b02"
     },
     "internal/account/account_test.go": {
       "source_sha256": "2d4f1e0e6d774c936567ed2c8cf75c5345ef1eb7f81e8e7efcf0e687f9adf647",
@@ -99,11 +99,11 @@
     },
     "internal/instances/catalog.go": {
       "source_sha256": "3bf9087dfb961595bec70e856980fb833561143049013790c75c51f781b86c24",
-      "imported_sha256": "586097b63950981d3a01e9aa831f66fdee7cefdfad421bf2e634e55bc52830b0"
+      "imported_sha256": "8fbdb3c4aa0b2cbd248dc703a4c6f8b2e6a43ae7a013782841b1bd21572d6b58"
     },
     "internal/instances/catalog_test.go": {
       "source_sha256": "a861fe1082c5486700b1e415f8844b454d0758cd9d94a18fa235fe50b658daa8",
-      "imported_sha256": "74cb2bef1c6f50741747721030023273f6c8a213ce98c7e1105e1c30b3bf96e5"
+      "imported_sha256": "584db285cba50eb3e86b60b603af05d466eee491d80a323b0c43a61c4582878e"
     },
     "internal/media/content.go": {
       "source_sha256": "a9ece1086c0bf626a68941d4343da26cabc5a1f311bcadecc21d496c387ac8cb",
@@ -123,7 +123,7 @@
     },
     "internal/media/parse_test.go": {
       "source_sha256": "e54d5a371320beac043199465bf8eef55017df0dac826f28fa7f0116690e1cdd",
-      "imported_sha256": "ec0738a12320035204cb368ef46780de417314b1ec3c1c6cb7007febeeb53ce3"
+      "imported_sha256": "6b3df935975745ba83bc445e544cb9a348f751671e2e112e4e4e94e7764d85f0"
     },
     "internal/media/quoted_reply.go": {
       "source_sha256": "0582e2e5823da7ae1f98bf38ec1e83fff0d2fbb8db8a7819db3ad19c43b9055e",
@@ -175,7 +175,7 @@
     },
     "internal/protocol/client.go": {
       "source_sha256": "e7178ee7d20bf35a0f42340e2138375bb9e2f9ea053b4c394252ba30a3319546",
-      "imported_sha256": "77c3566515bae6c759ed8370040eb182b784dbccdfdb8a40d7c91497bfbcf0b9"
+      "imported_sha256": "1f2bc57a0706b6850e8ee00433e6daeddeb53fb8bd3fff07edf278e0897a47c0"
     },
     "internal/protocol/compatibility_identity.go": {
       "source_sha256": "e370c86cc38ec70ad70eb7883b9e66b802e397144b6b6904305e83146493f207",
@@ -235,7 +235,7 @@
     },
     "internal/protocol/qr_login.go": {
       "source_sha256": "3d68f2a96ce71ce2d4cbae5bd684ca577872f6c68d09712cd523f36b60d29f66",
-      "imported_sha256": "cec9c879e36db0d50ec3204c33bad497aab04e58501d4cec4a830590f4a0afc3"
+      "imported_sha256": "68c6e23b141a70992096d7814decfad08d8a3a1e4dd4eade99d2bf290629eb8c"
     },
     "internal/protocol/qr_login_test.go": {
       "source_sha256": "4096cfbb96fb863da83ccad9b958d65d0b0e44e0453c591d91c505bb7ab39ba8",
@@ -247,75 +247,75 @@
     },
     "internal/service/channel.go": {
       "source_sha256": "171ceed3d6752f9846112e6c995f97af2661d1483e1168df894518852e8b3eb8",
-      "imported_sha256": "adc82d222c40d99953cebf33412f35d0b54987edd79c795cf95e6ab481ebfd22"
+      "imported_sha256": "5ad3e3d129d2e2f5703e56cba0f2e89c0a758bdf18c352cfa4fa8108226f3c2b"
     },
     "internal/service/connection.go": {
       "source_sha256": "ab89746f0d54f0af3ae1b760b10fd28ee3e73bccf030170d452590a75dabc78f",
-      "imported_sha256": "750675e6e4b5732069a55f49da8faf79caaf46d9ea014e43a4d6222d93662686"
+      "imported_sha256": "ad166c90772ff56544640bc3943fc654fa8353704b41312b1f9024f0e39e2fee"
     },
     "internal/service/connection_test.go": {
       "source_sha256": "fd3fa4cda2ab0387267e6730c15544594c0ef0c20580fc20c2939c5c09888a1a",
-      "imported_sha256": "ee0c96fa27e578f3ceeff6aa200af8c1a66beab8b85bc16fcd0fa4a8fb042731"
+      "imported_sha256": "bf91e0ec83e210edc1372ab59ffdccee052650184347b71e2e05a264eab9a441"
     },
     "internal/service/disk_login.go": {
       "source_sha256": "d8c9da55241422e8f810910ff0fc440b26249449dfed83e295d7210577b2e1c4",
-      "imported_sha256": "3ca3d179e8f15f425e1890643afff33759849a4abb7eab4ec27c890fe1861765"
+      "imported_sha256": "6637c5a24db56adf2c9b1a30881bbb3ad620d20b980a11fd11fc2579c33d6cf7"
     },
     "internal/service/disk_login_test.go": {
       "source_sha256": "9c2bc817644afba3f6d518202bb8bb21b51b1b8685546a7f686769ecc3283a8c",
-      "imported_sha256": "3e714c4cc1060f91cff146ca75774cf1fc17641c932f8d978a69ce323d2bd2f1"
+      "imported_sha256": "a5a32a4b2d076eafaf7ae196608336b663db1915018894ead5fb1a858117831e"
     },
     "internal/service/groups.go": {
       "source_sha256": "8cce04c845caefbf45bf2d1c58238c6e99856c5504af2fa73ac2b5f2a2f9c138",
-      "imported_sha256": "e82918a1e2e8329ca9eb751651182f82e6dcf744c5dd7336f21ce603ddf6f9a5"
+      "imported_sha256": "8b08c93567bd248a9568e4fa2f2fd76cbdb2436b7007c2b6c91fbe0dbce7e449"
     },
     "internal/service/login.go": {
       "source_sha256": "13fa8d91a0e028e6a0e052640f2cf818513039e58f872d8dabfd2b0e69027b14",
-      "imported_sha256": "de7813e172f1c65be45a843cd49e95a399ef9775832f94c4b6f8493dcbdb1370"
+      "imported_sha256": "17b59b02b3c192d9b8ab0f8280da3c33d370205f199956e1b3690016c1f7b226"
     },
     "internal/service/login_test.go": {
       "source_sha256": "555921940995bd4c6f7541a8f449f7e137ec05d8cc4fe3e5d6196c01e87376bf",
-      "imported_sha256": "c33f1d0a2b98783359bf72831973c9d94d4e04d45a963759e82fcdbfcd9aa5e0"
+      "imported_sha256": "7afa02a4a56fd1a11656d6c6c46cc79bb7be048975c9502dbef4e0118a40796b"
     },
     "internal/service/media.go": {
       "source_sha256": "cd03bb72407b6492cf895e74dfea7fa6bee6a89f497efe547b3c2c2c1229086c",
-      "imported_sha256": "69b5cb063287d3e9f282067850b2cf30680aa0b5b0dae23241b5edce8c535dac"
+      "imported_sha256": "471c3916a07d285b850703de911b4f66aec1637b04685b4cb003c924927f9029"
     },
     "internal/service/media_native.go": {
       "source_sha256": "08f2d1f98f3a1cf580e2d41a359645389c5abaa78bb4347b634416a7f4710edd",
-      "imported_sha256": "2ff13bb6ef6597e446a545e7357fb374b3b86fe6575957e104c47e697f36ab36"
+      "imported_sha256": "36560b472e9f5395181c3298a11684bebd370799d57d619e38b4f6619fa7335c"
     },
     "internal/service/media_send.go": {
       "source_sha256": "ff1495aeef75a3c9ef376fd832a8e5a97b7c2eb2f83943933a1a0821ad05978c",
-      "imported_sha256": "0274abe578ef63d392c8a498a3f8bd55612b4afa9f772c6d3a2eee1bdeaf7dc4"
+      "imported_sha256": "936b94cba0602c081119d4dd782dacf91982c0f5da8cbfccde41288414ca91b4"
     },
     "internal/service/media_send_native.go": {
       "source_sha256": "07cbcb94e405de2b5069b87725b56e56613a28471c1e378cd69204f2aad2f5d8",
-      "imported_sha256": "1d0e40f94918614873e7e684626bbd312bedd617d555652630aa61f5c19d83f9"
+      "imported_sha256": "ac3b19890a1652e1f244f9321a3f8fb0f69fbde94713da9293962553b3a282fb"
     },
     "internal/service/media_send_test.go": {
       "source_sha256": "6a75140a8dc37ddfe8a43ccd26ee54908bc8ce345ea8d622bebc412aeb7ebc72",
-      "imported_sha256": "ec9b3943d34d737e0f8776c3864764556a881f8216ad925df3e75f70f15f23ab"
+      "imported_sha256": "40747c75e679a2884cdeb5349287a7951d196abbb3a4b6106d3cd1ff66ca24de"
     },
     "internal/service/media_transfer.go": {
       "source_sha256": "eb29d019243714e08b93f85420645b34bab08be73dbafe74145ec26a6826628e",
-      "imported_sha256": "90f8e1f57dae3e381111d46274d3b1984fde1c8099df4a1520f1790b61a34135"
+      "imported_sha256": "2c4bcaaf08ce60dede9edda66aceb6c06bf1fa050454cd728bd2b92e43d39f27"
     },
     "internal/service/media_transfer_test.go": {
       "source_sha256": "c1525bd836647c5740a978650f9fb9f0004c0d1b4b1801e1efe9e4bede815e87",
-      "imported_sha256": "e654f97bcbba1d3f8411b699e376f495b0887e05c1346b3599a4e0028a25594a"
+      "imported_sha256": "9c3e6ac6fb1a055db39755775de511300faaa28cb025430c865b82a5541759ae"
     },
     "internal/service/recovery.go": {
       "source_sha256": "3fc073659b7eda6e0d27fbd78d369172713838145ec612f293a5fc466c75cc75",
-      "imported_sha256": "867d1e193ceb177cb3943113173b95cb3ad247017155276b1a7eae13dcec75c8"
+      "imported_sha256": "e273b169788f0abcef8a9f1002f99ff6662de17499cce4060da045fbd7f4fc5a"
     },
     "internal/service/recovery_test.go": {
       "source_sha256": "e0fb2834b4aab3399e64695692c25cd2f6a730cb99e04e422c482a53896f238e",
-      "imported_sha256": "966608f794d9b2803a31237b851cfcc96d93aeb7720303b5d7d18e36372b080a"
+      "imported_sha256": "fa9bc47dde6d9fee40e74d989b50099bd94af8dab14827b7e0a54371332afae4"
     },
     "internal/service/service.go": {
       "source_sha256": "9b3fee8cc94101e52eaa00060ca16b3caaf81a8bde6edb18ca8ce8d9ce554856",
-      "imported_sha256": "188f1698c8ed29eed36461c8573cd4f12345901c28e8ae16827f4aac82ced351"
+      "imported_sha256": "3057b3f177d6310890eac04eda62bf26345ca40444986b5e73cdcd37dfd5497e"
     },
     "internal/store/backup.go": {
       "source_sha256": "8b077665bf20476fe2c617601a32cb79860bea531ae1e58633837ac997445bed",
@@ -339,11 +339,11 @@
     },
     "internal/store/store.go": {
       "source_sha256": "e66b5e7948d6073948c62a6d5a461476b69728fee40ed84134120a0b19e0a3d0",
-      "imported_sha256": "a69c0b29dba88c5d64e310e3dbff1221422259e8b03311106f4c22b4b0f9df51"
+      "imported_sha256": "0b78d53e7dd0ce1e3fa57b79fcd21a8541f72378284dc019fbcc776e1c04a933"
     },
     "internal/store/store_test.go": {
       "source_sha256": "a3fbc294fa1282e4439f10b7874a2aaadcac3583a1a000e3d824c0d379eb07c1",
-      "imported_sha256": "fd4fbd683bc9e26b40abfad141ba4ccda8aae91ad6e49624146ceddd9604b89b"
+      "imported_sha256": "aaeb6aae418ce7854d3b4f25e059109ef294fab1ef5685e963e43a28fcec11e8"
     }
   }
 }

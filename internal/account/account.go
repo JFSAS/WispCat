@@ -22,9 +22,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JFSAS/wechat-runtime/internal/assets"
-	"github.com/JFSAS/wechat-runtime/internal/native"
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/assets"
+	"github.com/JFSAS/wispcat/internal/native"
+	"github.com/JFSAS/wispcat/internal/protocol"
 )
 
 const DefaultApp = "/Applications/WeChat.app"

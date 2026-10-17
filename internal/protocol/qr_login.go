@@ -16,8 +16,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/assets"
-	"github.com/JFSAS/wechat-runtime/internal/native"
+	"github.com/JFSAS/wispcat/internal/assets"
+	"github.com/JFSAS/wispcat/internal/native"
 )
 
 const (

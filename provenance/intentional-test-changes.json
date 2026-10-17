@@ -1,6 +1,6 @@
 {
   "internal/service/media_transfer_test.go": {
-    "sha256": "735cffc8ae1b82fd89e293b6d39573069680c9963f27fb562309b58f0a17cde1",
+    "sha256": "b364929b2a513a61715ea409aef0fc5b5516cdd2a67a21cf8d199d4fbb2df8fb",
     "reason": "Remove two model-layer integration tests and their unused imports; retain protocol/media transfer tests without importing a reply provider."
   }
 }

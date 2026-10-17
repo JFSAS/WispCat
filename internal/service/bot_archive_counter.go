@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"math"
 
-	"github.com/JFSAS/wechat-runtime/internal/securedb"
+	"github.com/JFSAS/wispcat/internal/securedb"
 )
 
 type nativeLedger struct {

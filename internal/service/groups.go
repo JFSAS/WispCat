@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/protocol"
 )
 
 func normalizedMessage(m protocol.Message, owner []byte) protocol.Message {

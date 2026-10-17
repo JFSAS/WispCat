@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
-	"github.com/JFSAS/wechat-runtime/internal/securedb"
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/securedb"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 func TestDirectoryRetainsOldPrivateGroupMemberAndMentionAfterCompaction(t *testing.T) {

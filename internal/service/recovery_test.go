@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 func TestAutomaticStartupWaitsForALoginChoice(t *testing.T) {

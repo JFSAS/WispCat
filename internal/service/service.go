@@ -20,10 +20,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/JFSAS/wechat-runtime/internal/account"
-	"github.com/JFSAS/wechat-runtime/internal/assets"
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/account"
+	"github.com/JFSAS/wispcat/internal/assets"
+	"github.com/JFSAS/wispcat/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 type Service struct {

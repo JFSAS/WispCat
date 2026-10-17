@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 const managementGuard = "wechat-runtime/management/v1"

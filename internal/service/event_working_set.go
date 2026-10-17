@@ -7,9 +7,9 @@ import (
 	"encoding/json"
 	"strconv"
 
-	"github.com/JFSAS/wechat-runtime/internal/messaging"
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
-	"github.com/JFSAS/wechat-runtime/internal/securedb"
+	"github.com/JFSAS/wispcat/internal/messaging"
+	"github.com/JFSAS/wispcat/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/securedb"
 )
 
 const historyWorkingEntries = 512

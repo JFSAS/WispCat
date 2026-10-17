@@ -5,9 +5,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/media"
-	"github.com/JFSAS/wechat-runtime/internal/securedb"
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/internal/media"
+	"github.com/JFSAS/wispcat/internal/securedb"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 func (a BotAdapter) downloadIncomingMedia(ctx context.Context, account, conversation, message, variant string) (bot.Content, error) {

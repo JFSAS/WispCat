@@ -7,9 +7,9 @@ import (
 	"mime/multipart"
 	"net/http"
 
-	"github.com/JFSAS/wechat-runtime/internal/credentials"
-	"github.com/JFSAS/wechat-runtime/internal/native"
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/credentials"
+	"github.com/JFSAS/wispcat/internal/native"
+	"github.com/JFSAS/wispcat/internal/protocol"
 )
 
 func readCredentialUpload(w http.ResponseWriter, r *http.Request) (protocol.Bootstrap, error) {

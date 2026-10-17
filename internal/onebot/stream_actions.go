@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 func streamAction(action string) bool {

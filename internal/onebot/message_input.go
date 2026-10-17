@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 // prepareSend performs a pure validation pass before resolving external media.

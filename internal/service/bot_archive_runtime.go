@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/messaging"
-	"github.com/JFSAS/wechat-runtime/internal/store"
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/internal/messaging"
+	"github.com/JFSAS/wispcat/internal/store"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 const archiveHighWater = 1024

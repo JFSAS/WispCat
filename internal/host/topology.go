@@ -11,10 +11,10 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/JFSAS/wechat-runtime/internal/instances"
-	"github.com/JFSAS/wechat-runtime/internal/native"
-	"github.com/JFSAS/wechat-runtime/internal/onebot"
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/instances"
+	"github.com/JFSAS/wispcat/internal/native"
+	"github.com/JFSAS/wispcat/internal/onebot"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 const maxTopologyBytes = 256 << 10

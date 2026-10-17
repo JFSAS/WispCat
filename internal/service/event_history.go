@@ -14,11 +14,11 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/JFSAS/wechat-runtime/internal/messaging"
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
-	"github.com/JFSAS/wechat-runtime/internal/securedb"
-	"github.com/JFSAS/wechat-runtime/internal/store"
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/internal/messaging"
+	"github.com/JFSAS/wispcat/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/securedb"
+	"github.com/JFSAS/wispcat/internal/store"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 var ErrEventHistory = fmt.Errorf("event_history_unavailable: %w", bot.ErrStorage)

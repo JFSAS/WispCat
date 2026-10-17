@@ -6,7 +6,7 @@ import (
 	"slices"
 	"unicode/utf8"
 
-	"github.com/JFSAS/wechat-runtime/internal/catalog"
+	"github.com/JFSAS/wispcat/internal/catalog"
 )
 
 func catalogTools() []any {

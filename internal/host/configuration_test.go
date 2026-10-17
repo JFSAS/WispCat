@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 func configurationFixture(t *testing.T, h *Host) (configurationPlan, string) {

@@ -30,7 +30,7 @@ from stall_fixture import StalledOneBot
 async def run():
     output=ROOT/'.bin/mcp-sdk-result.json';output.unlink(missing_ok=True)
     capture,source_sha=load_checked()
-    temp=Path(tempfile.mkdtemp(prefix='wechat-mcp-sdk-')).resolve()
+    temp=Path(tempfile.mkdtemp(prefix='wispcat-mcp-sdk-')).resolve()
     host=None;host_output=None;reserve=socket.socket();sdk_processes=[];escalations=[]
     original_create=stdio._create_platform_compatible_process
     original_terminate=stdio._terminate_process_tree
@@ -62,7 +62,7 @@ async def run():
         endpoints={row['name']:'http://'+row['onebot_address'] for row in rows}
         uploads=temp/'uploads';uploads.mkdir(mode=0o700)
         downloads=temp/'downloads';read_dir=temp/'read-must-not-exist'
-        base=dict(env,WECHAT_MCP_TOKEN=BOT,WECHAT_MCP_ENDPOINT=endpoints['synthetic-a'],WECHAT_MCP_UPLOAD_ROOT=str(uploads))
+        base=dict(env,WISPCAT_MCP_TOKEN=BOT,WISPCAT_MCP_ENDPOINT=endpoints['synthetic-a'],WISPCAT_MCP_UPLOAD_ROOT=str(uploads))
         negotiated=[];files=[];checks=[];discovery={}
 
         async def tool(session,name,action,params=None,execution=None,failed=False):
@@ -74,7 +74,7 @@ async def run():
             return json.loads(response.content[0].text)
 
         async def session_check(mode,endpoint,download_dir,callback):
-            environment=dict(base,WECHAT_MCP_MODE=mode,WECHAT_MCP_ENDPOINT=endpoint,WECHAT_MCP_STREAM_DIR=str(download_dir))
+            environment=dict(base,WISPCAT_MCP_MODE=mode,WISPCAT_MCP_ENDPOINT=endpoint,WISPCAT_MCP_STREAM_DIR=str(download_dir))
             parameters=StdioServerParameters(command=str(private['mcp-stream-client']),env=environment,cwd=str(temp))
             before=len(sdk_processes)
             async with stdio.stdio_client(parameters) as (reader,writer):

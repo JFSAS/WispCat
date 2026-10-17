@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/JFSAS/wechat-runtime/internal/cdn"
-	"github.com/JFSAS/wechat-runtime/internal/media"
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/cdn"
+	"github.com/JFSAS/wispcat/internal/media"
+	"github.com/JFSAS/wispcat/internal/protocol"
 )
 
 func (s *Service) nativeMediaSend(ctx context.Context, r MediaSendRequest) (MediaSendResult, error) {

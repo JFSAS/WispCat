@@ -14,8 +14,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/JFSAS/wechat-runtime/internal/securedb"
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/securedb"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 const incomingMediaFiles = 512

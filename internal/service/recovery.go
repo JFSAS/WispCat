@@ -4,7 +4,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/protocol"
 )
 
 // Recovery uses only the existing session and its saved automatic-login ticket.

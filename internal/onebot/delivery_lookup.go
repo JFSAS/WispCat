@@ -1,6 +1,6 @@
 package onebot
 
-import "github.com/JFSAS/wechat-runtime/pkg/bot"
+import "github.com/JFSAS/wispcat/pkg/bot"
 
 func (r *Runtime) deliveryByRequest(q Request, snap bot.Snapshot) Response {
 	key, err := paramString(q.Params, "wechat_request_id")

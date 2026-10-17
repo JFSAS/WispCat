@@ -1,19 +1,19 @@
 {
   "state_dir": ".private-state",
   "management_listen": "127.0.0.1:5099",
-  "management_token_env": "WECHAT_RUNTIME_ADMIN_TOKEN",
+  "management_token_env": "WISPCAT_ADMIN_TOKEN",
   "accounts": [
     {
       "name": "main",
       "instance": "instance:main",
       "mode": "offline",
       "listen": "127.0.0.1:5700",
-      "token_env": "WECHAT_ONEBOT_TOKEN",
+      "token_env": "WISPCAT_ONEBOT_TOKEN",
       "reverse": [
         {
           "name": "nonebot",
           "url": "ws://127.0.0.1:8080/onebot/v11/ws",
-          "token_env": "WECHAT_BOT_TOKEN",
+          "token_env": "WISPCAT_BOT_TOKEN",
           "role": "Universal"
         }
       ]

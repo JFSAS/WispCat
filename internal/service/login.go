@@ -11,10 +11,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/assets"
-	"github.com/JFSAS/wechat-runtime/internal/native"
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/assets"
+	"github.com/JFSAS/wispcat/internal/native"
+	"github.com/JFSAS/wispcat/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 type loginEngine interface {

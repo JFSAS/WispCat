@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/JFSAS/wechat-runtime/internal/instances"
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/instances"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 const maxConfigurationBytes = 1 << 20

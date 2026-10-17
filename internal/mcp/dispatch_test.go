@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/pkg/client"
+	"github.com/JFSAS/wispcat/pkg/client"
 )
 
 type mcpReply struct {

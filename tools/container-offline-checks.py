@@ -15,7 +15,7 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parent.parent
-LABEL = 'org.wechat-runtime.offline-fixture'
+LABEL = 'org.wispcat.offline-fixture'
 
 
 def binary_build_info(binary):
@@ -62,7 +62,7 @@ def main():
     input_hashes = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in input_paths}
     engine = json.loads(run('version', '--format', '{{json .Server}}').stdout)
     task = uuid.uuid4().hex
-    prefix = 'wechat-runtime-offline-' + task
+    prefix = 'wispcat-offline-' + task
     volume, primary, contender, probe = [prefix + suffix for suffix in ['-state', '-runtime', '-contender', '-probe']]
     containers = [primary, contender, probe]
     labels = ['--label', LABEL + '=' + task]
@@ -137,16 +137,16 @@ def main():
                 'readonly_root': host['ReadonlyRootfs'], 'privileged': host['Privileged'],
                 'cap_drop': host['CapDrop'], 'security_opt': host['SecurityOpt'],
                 'published_ports': False, 'network_namespace': run('exec', primary, 'readlink', '/proc/self/ns/net').stdout.strip()}
-            libraries = run('exec', primary, 'ldd', '/usr/local/bin/wechat-runtime').stdout
+            libraries = run('exec', primary, 'ldd', '/usr/local/bin/wispcat').stdout
             assert 'not found' not in libraries and 'libssl.so.3' in libraries and 'libsqlite3.so.0' in libraries
             package_versions = run('exec', primary, 'dpkg-query', '--show', '--showformat=${Package} ${Version}\n', 'libssl3', 'libsqlite3-0', 'ca-certificates').stdout
-            binary = directory / 'wechat-runtime'
-            run('cp', primary + ':/usr/local/bin/wechat-runtime', str(binary))
+            binary = directory / 'wispcat'
+            run('cp', primary + ':/usr/local/bin/wispcat', str(binary))
             version = binary_build_info(binary)
             assert 'CGO_ENABLED=1' in version and 'GOOS=linux' in version
             assert 'GOARCH=' + image['Architecture'] in version
             binary_metadata = {'sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
-                               'build_info': version.replace(str(binary), 'wechat-runtime')}
+                               'build_info': version.replace(str(binary), 'wispcat')}
             first = probe_api('initialize')
             assert first['network_namespace'] == runtime_details['network_namespace']
             results.append(first)

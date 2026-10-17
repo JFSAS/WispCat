@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JFSAS/wechat-runtime/internal/account"
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/account"
+	"github.com/JFSAS/wispcat/internal/protocol"
 )
 
 func TestDiskReadSuccessAndAuthenticationFailureAreDistinct(t *testing.T) {

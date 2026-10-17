@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 func TestRequestLookupReturnsOriginalReceiptWithoutResubmission(t *testing.T) {

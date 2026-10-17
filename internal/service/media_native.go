@@ -3,9 +3,9 @@ package service
 import (
 	"context"
 	"errors"
-	"github.com/JFSAS/wechat-runtime/internal/cdn"
-	"github.com/JFSAS/wechat-runtime/internal/media"
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/cdn"
+	"github.com/JFSAS/wispcat/internal/media"
+	"github.com/JFSAS/wispcat/internal/protocol"
 	"strings"
 )
 

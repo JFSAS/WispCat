@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
-	"github.com/JFSAS/wechat-runtime/pkg/client"
+	"github.com/JFSAS/wispcat/pkg/bot"
+	"github.com/JFSAS/wispcat/pkg/client"
 	"github.com/gorilla/websocket"
 )
 

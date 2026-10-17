@@ -3,7 +3,7 @@ package service
 import (
 	"errors"
 
-	"github.com/JFSAS/wechat-runtime/internal/account"
+	"github.com/JFSAS/wispcat/internal/account"
 )
 
 var ErrLoginSuperseded = errors.New("login_request_superseded")

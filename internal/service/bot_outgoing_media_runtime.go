@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/securedb"
-	"github.com/JFSAS/wechat-runtime/internal/store"
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/internal/securedb"
+	"github.com/JFSAS/wispcat/internal/store"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 const outgoingMediaRetention = 24 * time.Hour

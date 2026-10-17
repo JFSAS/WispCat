@@ -91,7 +91,7 @@ def run():
     binaries={name:ROOT/'.bin'/name for name in ['mcp-host-fixture','mcp-stream-client']}
     hashes={name:digest(path) for name,path in binaries.items()}
     logs=[];processes=[];release=threading.Event();stall=None;thread=None
-    temporary=tempfile.TemporaryDirectory(prefix='wechat-mcp-stdio-')
+    temporary=tempfile.TemporaryDirectory(prefix='wispcat-mcp-stdio-')
     try:
         temp=Path(temporary.name).resolve()
         private={}
@@ -121,7 +121,7 @@ def run():
         endpoint={row['name']:'http://'+row['onebot_address'] for row in rows}
         uploads=temp/'uploads';uploads.mkdir(mode=0o700)
         downloads=temp/'downloads'
-        base=dict(env,WECHAT_MCP_ENDPOINT=endpoint['synthetic-a'],WECHAT_MCP_TOKEN=BOT,WECHAT_MCP_MODE='write',WECHAT_MCP_UPLOAD_ROOT=str(uploads),WECHAT_MCP_STREAM_DIR=str(downloads),WECHAT_MCP_MAX_STREAM_BYTES=str(2<<20))
+        base=dict(env,WISPCAT_MCP_ENDPOINT=endpoint['synthetic-a'],WISPCAT_MCP_TOKEN=BOT,WISPCAT_MCP_MODE='write',WISPCAT_MCP_UPLOAD_ROOT=str(uploads),WISPCAT_MCP_STREAM_DIR=str(downloads),WISPCAT_MCP_MAX_STREAM_BYTES=str(2<<20))
         mcp=MCP(private['mcp-stream-client'],base,logs,processes)
         tools=mcp.initialize()
         invoke=next(tool for tool in tools if tool['name']=='invoke_action')
@@ -149,13 +149,13 @@ def run():
         mcp.stop()
         reopened=MCP(private['mcp-stream-client'],base,logs,processes);reopened.initialize()
         for item in received:assert digest(item['path'])==item['sha256']
-        other_env=dict(base,WECHAT_MCP_ENDPOINT=endpoint['synthetic-b'],WECHAT_MCP_STREAM_DIR=str(temp/'other-downloads'))
+        other_env=dict(base,WISPCAT_MCP_ENDPOINT=endpoint['synthetic-b'],WISPCAT_MCP_STREAM_DIR=str(temp/'other-downloads'))
         other=MCP(private['mcp-stream-client'],other_env,logs,processes);other.initialize()
         other.tool('invoke_action','download_file_stream',{'file':references[0]},failed=True)
         assert not list((temp/'other-downloads').glob('*.bin')) and not list((temp/'other-downloads').glob('*.part'))
         other.stop()
         read_dir=temp/'read-must-not-exist'
-        read=MCP(private['mcp-stream-client'],dict(base,WECHAT_MCP_MODE='read',WECHAT_MCP_STREAM_DIR=str(read_dir)),logs,processes)
+        read=MCP(private['mcp-stream-client'],dict(base,WISPCAT_MCP_MODE='read',WISPCAT_MCP_STREAM_DIR=str(read_dir)),logs,processes)
         assert 'invoke_action' not in {tool['name'] for tool in read.initialize()}
         read.tool('query_action','download_file_stream',{'file':references[0]},failed=True)
         read.tool('query_action','upload_file_stream',failed=True)
@@ -177,17 +177,17 @@ def run():
             def log_message(self,*_):pass
         stall=ThreadingHTTPServer(('127.0.0.1',0),Stalled);thread=threading.Thread(target=stall.serve_forever);thread.start()
         cancel_dir=temp/'cancel-downloads'
-        cancel_env=dict(base,WECHAT_MCP_ENDPOINT=f'http://127.0.0.1:{stall.server_port}',WECHAT_MCP_STREAM_DIR=str(cancel_dir))
+        cancel_env=dict(base,WISPCAT_MCP_ENDPOINT=f'http://127.0.0.1:{stall.server_port}',WISPCAT_MCP_STREAM_DIR=str(cancel_dir))
         cancelled=MCP(private['mcp-stream-client'],cancel_env,logs,processes);cancelled.initialize()
         cancelled.send('tools/call',{'name':'invoke_action','arguments':{'action':'download_file_stream','params':{'file':'synthetic'}}})
         assert entered.wait(timeout=5)
         cancelled.stop()
         assert not list(cancel_dir.glob('*.part')) and not list(cancel_dir.glob('*.bin'))
-        recovered=MCP(private['mcp-stream-client'],dict(base,WECHAT_MCP_STREAM_DIR=str(cancel_dir)),logs,processes)
+        recovered=MCP(private['mcp-stream-client'],dict(base,WISPCAT_MCP_STREAM_DIR=str(cancel_dir)),logs,processes)
         recovered.initialize();recovered.stop()
         release.set();stall.shutdown();stall.server_close();thread.join(timeout=5);assert not thread.is_alive();stall=None
         pressure_dir=temp/'pressure-downloads'
-        pressure_env=dict(base,WECHAT_MCP_STREAM_DIR=str(pressure_dir))
+        pressure_env=dict(base,WISPCAT_MCP_STREAM_DIR=str(pressure_dir))
         pressure=MCP(private['mcp-stream-client'],pressure_env,logs,processes);pressure.initialize()
         for _ in range(32):pressure.send('tools/call',{'name':'list_actions','arguments':{}})
         assert select.select([pressure.process.stdout],[],[],5)[0]
@@ -196,7 +196,7 @@ def run():
         pressure_reopen=MCP(private['mcp-stream-client'],pressure_env,logs,processes)
         pressure_reopen.initialize();pressure_reopen.stop()
         invalid=[]
-        for key,value in [('WECHAT_MCP_MAX_STREAM_BYTES','0'),('WECHAT_MCP_MAX_STREAM_BYTES',str((16<<20)+1)),('WECHAT_MCP_MAX_STREAM_BYTES','+1'),('WECHAT_MCP_TIMEOUT_MS','600001')]:
+        for key,value in [('WISPCAT_MCP_MAX_STREAM_BYTES','0'),('WISPCAT_MCP_MAX_STREAM_BYTES',str((16<<20)+1)),('WISPCAT_MCP_MAX_STREAM_BYTES','+1'),('WISPCAT_MCP_TIMEOUT_MS','600001')]:
             bad=subprocess.run([str(private['mcp-stream-client'])],env=dict(base,**{key:value}),cwd=temp,input='',capture_output=True,text=True,timeout=8)
             assert bad.returncode==1 and 'invalid_mcp_transfer_config' in bad.stderr
             invalid.append(key+'='+value)
@@ -208,7 +208,7 @@ def run():
         reserved.close()
         assert all(digest(private[name])==hashes[name] for name in private)
         assert load_checked()[1]==source_sha
-        result={'result':'pass','scope':'Actual wechat-mcp stdio process, Python JSON-RPC probe and actual Host/Service/OneBot encrypted stream storage; synthetic account worker only',
+        result={'result':'pass','scope':'Actual wispcat-mcp stdio process, Python JSON-RPC probe and actual Host/Service/OneBot encrypted stream storage; synthetic account worker only',
             'third_party_mcp_client':False,'file_round_trips':[{'bytes':item['bytes'],'sha256':item['sha256'],'frames':item['frames']} for item in received],
             'completed_files_survive_mcp_reopen':True,'cross_account_reference_denied':True,'read_mode_created_no_directory':True,'concurrent_directory_owner_refused':True,
             'active_sigterm_cancelled_http_and_removed_partial':True,'idle_sigterm_exit_zero':True,'post_cancel_owner_reopen':True,'runtime_stream_cleanup_zero':True,

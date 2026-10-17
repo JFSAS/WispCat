@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"math"
 
-	"github.com/JFSAS/wechat-runtime/internal/securedb"
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/securedb"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 // Immutable archive counts still describe every original media fact. This

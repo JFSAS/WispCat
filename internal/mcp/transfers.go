@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/pkg/client"
+	"github.com/JFSAS/wispcat/pkg/client"
 )
 
 const transferFiles = 128
@@ -61,7 +61,7 @@ func OpenTransfers(config TransferConfig) (result *Transfers, err error) {
 	}
 	directory := config.DownloadDir
 	if directory == "" {
-		directory, err = os.MkdirTemp("", "wechat-mcp-downloads-")
+		directory, err = os.MkdirTemp("", "wispcat-mcp-downloads-")
 	} else {
 		err = os.MkdirAll(directory, 0700)
 	}

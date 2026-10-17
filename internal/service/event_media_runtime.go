@@ -14,11 +14,11 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/JFSAS/wechat-runtime/internal/cdn"
-	"github.com/JFSAS/wechat-runtime/internal/media"
-	"github.com/JFSAS/wechat-runtime/internal/securedb"
-	"github.com/JFSAS/wechat-runtime/internal/store"
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/internal/cdn"
+	"github.com/JFSAS/wispcat/internal/media"
+	"github.com/JFSAS/wispcat/internal/securedb"
+	"github.com/JFSAS/wispcat/internal/store"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 func (h *EventHistory) mediaWriteLocked(account string, change func(*securedb.Tx) error) error {

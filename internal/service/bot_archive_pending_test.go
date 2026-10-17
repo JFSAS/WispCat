@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 func snapshotArchiveFiles(t *testing.T, a *DeliveryArchive) map[string][]byte {

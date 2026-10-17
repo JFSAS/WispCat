@@ -1,4 +1,4 @@
-module github.com/JFSAS/wechat-runtime
+module github.com/JFSAS/wispcat
 
 go 1.25.0
 

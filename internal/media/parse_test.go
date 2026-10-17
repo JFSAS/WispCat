@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JFSAS/wechat-runtime/internal/media"
+	"github.com/JFSAS/wispcat/internal/media"
 )
 
 const (

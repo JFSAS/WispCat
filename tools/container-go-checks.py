@@ -11,7 +11,7 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parent.parent
-LABEL = 'org.wechat-runtime.offline-go-tests'
+LABEL = 'org.wispcat.offline-go-tests'
 
 
 def manifest(directory):
@@ -65,7 +65,7 @@ def main():
     assert builder['Os'] == runtime_image['Os'] == 'linux' and builder['Architecture'] == runtime_image['Architecture']
     architecture = builder['Architecture']
     task = uuid.uuid4().hex
-    name = 'wechat-runtime-go-' + task
+    name = 'wispcat-go-' + task
     extraction = name + '-artifact'
     (ROOT / '.bin').mkdir(exist_ok=True)
     raw_path = ROOT / '.bin' / (name + '.jsonl')
@@ -88,7 +88,7 @@ def main():
             run('cp', name + ':/src', str(directory))
             require_matching_source(directory / 'src', source)
             binary = directory / 'built-runtime'
-            run('cp', name + ':/out/wechat-runtime', str(binary))
+            run('cp', name + ':/out/wispcat', str(binary))
             built_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
             # Inspect the runtime artifact in an unstarted, network-disabled
             # temporary container; do not run a second state owner.
@@ -96,7 +96,7 @@ def main():
                 '--network', 'none', runtime_image['Id'], 'catalog')
             try:
                 actual = directory / 'runtime-image-binary'
-                run('cp', extraction + ':/usr/local/bin/wechat-runtime', str(actual))
+                run('cp', extraction + ':/usr/local/bin/wispcat', str(actual))
                 assert hashlib.sha256(actual.read_bytes()).hexdigest() == built_sha, 'Test builder is not the producer of this runtime binary'
             finally:
                 run('rm', extraction)

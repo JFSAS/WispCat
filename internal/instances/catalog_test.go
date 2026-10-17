@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 func legacyFixture(t *testing.T, root, app string) *store.Data {

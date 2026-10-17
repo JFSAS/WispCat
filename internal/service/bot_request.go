@@ -1,6 +1,6 @@
 package service
 
-import "github.com/JFSAS/wechat-runtime/pkg/bot"
+import "github.com/JFSAS/wispcat/pkg/bot"
 
 // DeliveryByRequest reads the same account-scoped identity used by Submit.
 // It neither validates/reloads a payload nor schedules or retries native work.

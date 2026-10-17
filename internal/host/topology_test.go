@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/instances"
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/instances"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 func topologyFixture(t *testing.T) (*Host, Config) {

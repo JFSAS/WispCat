@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 type PostConfig struct{ Name, URL, Secret string }

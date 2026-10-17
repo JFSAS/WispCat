@@ -10,13 +10,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/host"
-	"github.com/JFSAS/wechat-runtime/internal/onebot"
+	"github.com/JFSAS/wispcat/internal/host"
+	"github.com/JFSAS/wispcat/internal/onebot"
 )
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "wechat-runtime:", err)
+		fmt.Fprintln(os.Stderr, "wispcat:", err)
 		os.Exit(1)
 	}
 }
@@ -29,7 +29,7 @@ func run(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode((&onebot.Runtime{}).Actions())
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
-	path := flags.String("config", "runtime.local.json", "runtime configuration file")
+	path := flags.String("config", "wispcat.local.json", "runtime configuration file")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}

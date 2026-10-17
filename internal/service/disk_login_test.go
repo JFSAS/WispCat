@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"errors"
-	"github.com/JFSAS/wechat-runtime/internal/account"
+	"github.com/JFSAS/wispcat/internal/account"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/protocol"
 )
 
 func diskAppFixture(t *testing.T, name, bundle string) string {

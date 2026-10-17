@@ -13,7 +13,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/protocol"
 )
 
 const (

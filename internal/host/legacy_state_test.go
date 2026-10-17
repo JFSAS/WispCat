@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 func writeLegacyPublicID(t *testing.T, directory, account string) int64 {

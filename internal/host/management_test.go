@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 func managementJSON(t *testing.T, base, secret, method, path, body string, code int) map[string]any {

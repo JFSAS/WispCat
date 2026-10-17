@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/JFSAS/wechat-runtime/internal/catalog"
-	"github.com/JFSAS/wechat-runtime/pkg/client"
+	"github.com/JFSAS/wispcat/internal/catalog"
+	"github.com/JFSAS/wispcat/pkg/client"
 )
 
 func catalogRPC(id int, name, arguments string) string {

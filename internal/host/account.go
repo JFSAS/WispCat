@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/instances"
-	"github.com/JFSAS/wechat-runtime/internal/onebot"
-	"github.com/JFSAS/wechat-runtime/internal/service"
+	"github.com/JFSAS/wispcat/internal/instances"
+	"github.com/JFSAS/wispcat/internal/onebot"
+	"github.com/JFSAS/wispcat/internal/service"
 )
 
 // Account ownership depends on a start/join interface. Production always uses

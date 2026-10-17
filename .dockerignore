@@ -1,5 +1,11 @@
 .git
 .bin
 .private-state
+wispcat.local.json
 runtime.local.json
+.env
+.env.*
+*.wxlogin
 reports
+__pycache__
+*.pyc

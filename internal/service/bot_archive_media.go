@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 
-	"github.com/JFSAS/wechat-runtime/internal/cdn"
+	"github.com/JFSAS/wispcat/internal/cdn"
 )
 
 type archiveMediaReservation struct {

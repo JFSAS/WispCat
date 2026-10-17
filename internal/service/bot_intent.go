@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 type botIntent struct {

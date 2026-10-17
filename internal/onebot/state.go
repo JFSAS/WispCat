@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/JFSAS/wechat-runtime/internal/securedb"
+	"github.com/JFSAS/wispcat/internal/securedb"
 )
 
 type reference struct {

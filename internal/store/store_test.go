@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/protocol"
 )
 
 func syntheticData(username string) *Data {

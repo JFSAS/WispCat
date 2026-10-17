@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/store"
 	bolt "go.etcd.io/bbolt"
 )
 

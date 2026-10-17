@@ -9,7 +9,7 @@ mcp_probe=tests/mcp/stdio_probe.py
 case "${1:-}" in '' ) ;; --sdk) mcp_probe=tests/mcp/sdk_probe.py ;; *) echo 'Unknown MCP probe.' >&2; exit 1 ;; esac
 mcp_source_sha="$("$mcp_python" tests/mcp/source_capture.py)"
 sh tools/go.sh build -race -tags integrationfixtures -trimpath -ldflags "-X main.deploymentSourceSHA=$mcp_source_sha" -o .bin/mcp-host-fixture ./tests/deployment/fixture
-sh tools/go.sh build -race -trimpath -o .bin/mcp-stream-client ./cmd/wechat-mcp
+sh tools/go.sh build -race -trimpath -o .bin/mcp-stream-client ./cmd/wispcat-mcp
 "$mcp_python" tests/mcp/source_capture.py --check
 case "$(uname -s)" in
   Darwin)

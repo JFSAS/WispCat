@@ -21,7 +21,7 @@ soak_run=$(mktemp -d ".bin/$platform-runtime-soak.XXXXXX")
 manifest="$soak_run/source.json"
 python3 tools/report-runtime-soak.py capture "$manifest"
 soak_source_sha=$(python3 -c 'import hashlib,sys; from pathlib import Path; print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())' "$manifest")
-soak_ldflags="-X github.com/JFSAS/wechat-runtime/internal/service.soakSourceManifestSHA=$soak_source_sha"
+soak_ldflags="-X github.com/JFSAS/wispcat/internal/service.soakSourceManifestSHA=$soak_source_sha"
 sh tools/go.sh vet -tags runtimefixtures ./internal/service
 if [ "$platform" = macos ]; then
   sandbox-exec -p '(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:*"))' sh tools/go.sh test -race -count=1 -timeout 70m -json -tags runtimefixtures -ldflags "$soak_ldflags" ./internal/service -run '^TestRuntimeOfflineSoak$' > "$soak_run/tests.jsonl"

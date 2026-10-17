@@ -19,8 +19,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/JFSAS/wechat-runtime/internal/cdn"
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/cdn"
+	"github.com/JFSAS/wispcat/internal/protocol"
 )
 
 //go:embed deployment-media.json

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/onebot"
+	"github.com/JFSAS/wispcat/internal/onebot"
 )
 
 type inboundEpoch struct {

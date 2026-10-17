@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/host"
+	"github.com/JFSAS/wispcat/internal/host"
 )
 
 const token = "synthetic-deployment-control-token"

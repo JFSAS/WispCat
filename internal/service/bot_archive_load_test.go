@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 // This exercises the production normalized submission/checkpoint/archive path.

@@ -24,7 +24,7 @@ def main():
         project = directory / 'synthetic-project'
         (project / 'tools').mkdir(parents=True)
         (project / '.bin' / 'reports').mkdir(parents=True)
-        (project / 'go.mod').write_text('module github.com/JFSAS/wechat-runtime\n\ngo 1.25\n')
+        (project / 'go.mod').write_text('module github.com/JFSAS/wispcat\n\ngo 1.25\n')
         (project / 'fixture.go').write_text('package fixture\n')
         fixture_parser = project / 'tools/report-runtime-soak.py'
         shutil.copyfile(PARSER, fixture_parser)
@@ -38,7 +38,7 @@ def main():
                    'oldest_queries_and_idempotency_after_reopen': True,
                    'cross_account_public_id_fencing': True,
                    'temporary_references_rejected_after_reopen': True}
-        package = 'github.com/JFSAS/wechat-runtime/internal/service'
+        package = 'github.com/JFSAS/wispcat/internal/service'
         target = 'TestRuntimeOfflineSoak'
         output = 'RUNTIME_SOAK_REPORT=' + json.dumps(payload) + '\n'
         events = [

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
-	"github.com/JFSAS/wechat-runtime/pkg/bot"
+	"github.com/JFSAS/wispcat/internal/protocol"
+	"github.com/JFSAS/wispcat/pkg/bot"
 )
 
 func TestBotCanonicalSenderAcrossPrivateAndTwoGroups(t *testing.T) {

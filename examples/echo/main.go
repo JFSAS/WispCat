@@ -9,11 +9,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/JFSAS/wechat-runtime/pkg/client"
+	"github.com/JFSAS/wispcat/pkg/client"
 )
 
 func main() {
-	c, err := client.New(os.Getenv("WECHAT_ONEBOT_ENDPOINT"), os.Getenv("WECHAT_ONEBOT_TOKEN"))
+	c, err := client.New(os.Getenv("WISPCAT_ONEBOT_ENDPOINT"), os.Getenv("WISPCAT_ONEBOT_TOKEN"))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

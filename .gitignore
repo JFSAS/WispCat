@@ -2,7 +2,11 @@
 .bin/
 *.test
 coverage.out
+wispcat.local.json
 runtime.local.json
+.env
+.env.*
+!.env.example
 __pycache__/
 *.pyc
 

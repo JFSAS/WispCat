@@ -4,7 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 
-	"github.com/JFSAS/wechat-runtime/internal/securedb"
+	"github.com/JFSAS/wispcat/internal/securedb"
 )
 
 // ImportLegacyDirectories reserves mappings from newly enabled local instances

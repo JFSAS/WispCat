@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JFSAS/wechat-runtime/internal/account"
-	"github.com/JFSAS/wechat-runtime/internal/credentials"
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/account"
+	"github.com/JFSAS/wispcat/internal/credentials"
+	"github.com/JFSAS/wispcat/internal/protocol"
 )
 
 func TestExportUsesSelectedSourceAndNeverOverwrites(t *testing.T) {
@@ -51,7 +51,7 @@ func TestExportUsesSelectedSourceAndNeverOverwrites(t *testing.T) {
 }
 
 func TestExportFailsBeforeReadingWithoutPasswordAndRedactsErrors(t *testing.T) {
-	t.Setenv("WECHAT_CREDENTIAL_PASSPHRASE", "")
+	t.Setenv("WISPCAT_CREDENTIAL_PASSPHRASE", "")
 	called := false
 	load := func(string) (protocol.Bootstrap, error) {
 		called = true
@@ -60,7 +60,7 @@ func TestExportFailsBeforeReadingWithoutPasswordAndRedactsErrors(t *testing.T) {
 	if err := run(nil, &bytes.Buffer{}, load); err == nil || called {
 		t.Fatal("read credentials without valid export password")
 	}
-	t.Setenv("WECHAT_CREDENTIAL_PASSPHRASE", "synthetic-export-password")
+	t.Setenv("WISPCAT_CREDENTIAL_PASSPHRASE", "synthetic-export-password")
 	err := run(nil, &bytes.Buffer{}, load)
 	if err == nil || strings.Contains(err.Error(), "secret-value") || !strings.Contains(err.Error(), "read_config") {
 		t.Fatal("disk diagnostics not redacted")

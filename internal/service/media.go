@@ -1,8 +1,8 @@
 package service
 
 import (
-	"github.com/JFSAS/wechat-runtime/internal/media"
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/media"
+	"github.com/JFSAS/wispcat/internal/protocol"
 )
 
 // messageView is the display boundary. Raw media XML carries download keys

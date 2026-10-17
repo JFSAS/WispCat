@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/JFSAS/wechat-runtime/internal/instances"
-	"github.com/JFSAS/wechat-runtime/internal/store"
+	"github.com/JFSAS/wispcat/internal/instances"
+	"github.com/JFSAS/wispcat/internal/store"
 )
 
 type inboundPlan struct {

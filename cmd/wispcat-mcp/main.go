@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/JFSAS/wechat-runtime/internal/mcp"
-	"github.com/JFSAS/wechat-runtime/pkg/client"
+	"github.com/JFSAS/wispcat/internal/mcp"
+	"github.com/JFSAS/wispcat/pkg/client"
 )
 
 func main() {
@@ -23,8 +23,8 @@ func main() {
 }
 
 func run() (result error) {
-	mode := os.Getenv("WECHAT_MCP_MODE")
-	endpoint := os.Getenv("WECHAT_MCP_ENDPOINT")
+	mode := os.Getenv("WISPCAT_MCP_MODE")
+	endpoint := os.Getenv("WISPCAT_MCP_ENDPOINT")
 	if mode == "" {
 		mode = "docs"
 		if endpoint != "" {
@@ -33,22 +33,22 @@ func run() (result error) {
 	}
 	server := mcp.Server{Mode: mode}
 	if mode != "docs" {
-		c, err := client.New(endpoint, os.Getenv("WECHAT_MCP_TOKEN"))
+		c, err := client.New(endpoint, os.Getenv("WISPCAT_MCP_TOKEN"))
 		if err != nil {
 			return errors.New("MCP endpoint or token is invalid")
 		}
 		server.Client = c
 	}
 	if mode == "write" {
-		maximum, err := positiveEnv("WECHAT_MCP_MAX_STREAM_BYTES", client.MaxStreamFileBytes, client.MaxStreamFileBytes)
+		maximum, err := positiveEnv("WISPCAT_MCP_MAX_STREAM_BYTES", client.MaxStreamFileBytes, client.MaxStreamFileBytes)
 		if err != nil {
 			return err
 		}
-		timeout, err := positiveEnv("WECHAT_MCP_TIMEOUT_MS", 30000, 600000)
+		timeout, err := positiveEnv("WISPCAT_MCP_TIMEOUT_MS", 30000, 600000)
 		if err != nil {
 			return err
 		}
-		config := mcp.TransferConfig{DownloadDir: os.Getenv("WECHAT_MCP_STREAM_DIR"), UploadRoot: os.Getenv("WECHAT_MCP_UPLOAD_ROOT"), MaxFileBytes: maximum, Timeout: time.Duration(timeout) * time.Millisecond}
+		config := mcp.TransferConfig{DownloadDir: os.Getenv("WISPCAT_MCP_STREAM_DIR"), UploadRoot: os.Getenv("WISPCAT_MCP_UPLOAD_ROOT"), MaxFileBytes: maximum, Timeout: time.Duration(timeout) * time.Millisecond}
 		transfers, err := mcp.OpenTransfers(config)
 		if err != nil {
 			return err

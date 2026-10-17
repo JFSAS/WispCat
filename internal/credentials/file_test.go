@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/protocol"
 )
 
 func syntheticBootstrap() protocol.Bootstrap {

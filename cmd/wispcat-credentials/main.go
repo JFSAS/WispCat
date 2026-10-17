@@ -1,4 +1,4 @@
-// wechat-credentials exports the original main's verified Mac disk bootstrap.
+// wispcat-credentials exports the original main's verified Mac disk bootstrap.
 // It never connects to WeChat or reads another runtime's private checkpoint.
 package main
 
@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/JFSAS/wechat-runtime/internal/account"
-	"github.com/JFSAS/wechat-runtime/internal/credentials"
-	"github.com/JFSAS/wechat-runtime/internal/protocol"
+	"github.com/JFSAS/wispcat/internal/account"
+	"github.com/JFSAS/wispcat/internal/credentials"
+	"github.com/JFSAS/wispcat/internal/protocol"
 )
 
 func main() {
@@ -30,11 +30,11 @@ func main() {
 }
 
 func run(args []string, out io.Writer, load func(string) (protocol.Bootstrap, error)) error {
-	flags := flag.NewFlagSet("wechat-credentials", flag.ContinueOnError)
+	flags := flag.NewFlagSet("wispcat-credentials", flag.ContinueOnError)
 	flags.SetOutput(out)
 	app := flags.String("app", account.DefaultApp, "official WeChat .app installation")
-	path := flags.String("out", "wechat-login.wxlogin", "encrypted output file (must not exist)")
-	env := flags.String("passphrase-env", "WECHAT_CREDENTIAL_PASSPHRASE", "environment variable containing the export password (16+ bytes)")
+	path := flags.String("out", "wispcat-login.wxlogin", "encrypted output file (must not exist)")
+	env := flags.String("passphrase-env", "WISPCAT_CREDENTIAL_PASSPHRASE", "environment variable containing the export password (16+ bytes)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil

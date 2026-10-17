@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/JFSAS/wechat-runtime/pkg/client"
+	"github.com/JFSAS/wispcat/pkg/client"
 )
 
 // Only the synthetic non-file action is summarized. File payloads can never
