@@ -1,0 +1,353 @@
+diff --git a/internal/protocol/client.go b/internal/protocol/client.go
+index 0601dcd..edb9ea2 100644
+--- a/internal/protocol/client.go
++++ b/internal/protocol/client.go
+@@ -35,6 +35,9 @@ func (c *Client) exchange(ctx context.Context, command uint16, path string, pack
+ 	if e != nil {
+ 		return zero, nil, e
+ 	}
++	if e = validateHTTPResponse(raw); e != nil {
++		return zero, nil, e
++	}
+ 	resp, e := http.ReadResponse(bufio.NewReader(bytes.NewReader(raw)), nil)
+ 	if e != nil {
+ 		return zero, nil, ErrWire
+diff --git a/internal/service/connection.go b/internal/service/connection.go
+index 39a2275..130ee1a 100644
+--- a/internal/service/connection.go
++++ b/internal/service/connection.go
+@@ -11,14 +11,15 @@ import (
+ )
+ 
+ type connectionAttempt struct {
+-	ID                 uint64 `json:"attempt_id"`
+-	StartedAt          int64  `json:"started_at"`
+-	Source             string `json:"source"`
+-	Stage              string `json:"stage"`
+-	DiskRead           string `json:"disk_read"`
+-	TicketMatchesCache *bool  `json:"ticket_matches_cache,omitempty"`
+-	AuthReason         string `json:"auth_reason,omitempty"`
+-	NextStep           string `json:"next_step"`
++	ID                 uint64         `json:"attempt_id"`
++	StartedAt          int64          `json:"started_at"`
++	Source             string         `json:"source"`
++	Stage              string         `json:"stage"`
++	DiskRead           string         `json:"disk_read"`
++	TicketMatchesCache *bool          `json:"ticket_matches_cache,omitempty"`
++	AuthReason         string         `json:"auth_reason,omitempty"`
++	NextStep           string         `json:"next_step"`
++	Failure            *failureReport `json:"last_error,omitempty"`
+ }
+ 
+ func (s *Service) beginConnectionLocked(source, stage string) {
+diff --git a/internal/service/media_send.go b/internal/service/media_send.go
+index eed7f4a..26b46bb 100644
+--- a/internal/service/media_send.go
++++ b/internal/service/media_send.go
+@@ -210,6 +210,8 @@ func (s *Service) sendMediaQueued(ctx context.Context, id string) error {
+ 	j.Media.Stage = "uploading"
+ 	j.Attempts++
+ 	if err := s.saveLocked(); err != nil {
++		j.Status, j.Media.Stage = "queued", "queued"
++		j.Attempts--
+ 		s.mu.Unlock()
+ 		return err
+ 	}
+diff --git a/internal/service/recovery.go b/internal/service/recovery.go
+index 2dd1298..cfdfee3 100644
+--- a/internal/service/recovery.go
++++ b/internal/service/recovery.go
+@@ -4,21 +4,35 @@ import (
+ 	"errors"
+ 	"time"
+ 
++	"github.com/JFSAS/wispcat/internal/native"
+ 	"github.com/JFSAS/wispcat/internal/protocol"
+ )
+ 
+ // Recovery uses only the existing session and its saved automatic-login ticket.
+ // Only an explicit disk-login operation imports a replacement from official disk.
+ type sessionRecovery struct {
+-	reauth    bool
+-	refreshed bool
+-	retries   int
++	reauth          bool
++	refreshed       bool
++	retries         int
++	protocolRetries int
++	authAttempts    int
+ }
+ 
+ func (s *Service) recoverFailure(err error, recovery *sessionRecovery) (time.Duration, bool) {
++	s.mu.RLock()
++	operation, sessionState := s.operation, s.sessionState
++	if operation == "" {
++		operation = s.connection.Stage
++	}
++	s.mu.RUnlock()
++	f := classifyFailure(err, operation)
+ 	var p *protocol.Error
+ 	if errors.As(err, &p) {
+ 		if p.Category == "authentication_backoff" {
++			// The protocol limiter made no request; do not consume a login attempt.
++			if recovery.authAttempts > 0 {
++				recovery.authAttempts--
++			}
+ 			s.mu.Lock()
+ 			s.state, s.detail = "recovering", "正在等待鉴权间隔，随后继续恢复登录状态"
+ 			s.mu.Unlock()
+@@ -32,22 +46,53 @@ func (s *Service) recoverFailure(err error, recovery *sessionRecovery) (time.Dur
+ 			s.state, s.sessionState = "recovering", "refreshing"
+ 			s.detail = "正在使用缓存票据自动恢复登录状态"
+ 			s.category, s.code = "session_refreshing", 0
++			f.retries, f.limit = recovery.authAttempts, authenticationAttemptLimit
++			s.reportFailureLocked(f, "refresh_cached_session", 0)
+ 			s.mu.Unlock()
+ 			return 0, true
+ 		}
+-		// HTTP outages do not prove that a credential has expired.
+-		if p.Category != "http_response_failed" || (p.Code != 408 && p.Code != 429 && (p.Code < 500 || p.Code > 599)) {
+-			s.block(err)
++	}
++	var exchange *native.ExchangeError
++	if errors.As(err, &exchange) && !exchange.Retryable {
++		s.block(err)
++		return 0, false
++	}
++	var response *protocol.ResponseError
++	retryableProtocol := errors.Is(err, protocol.ErrWire) || (errors.As(err, &response) && response.Reason != "http_body_limit")
++	if f.class == "protocol" && retryableProtocol && operation == "sync" && sessionState == "validated" && !recovery.reauth {
++		if recovery.protocolRetries >= protocolRetryLimit {
++			f.reason, f.retries, f.limit = "protocol_retry_exhausted", recovery.protocolRetries, protocolRetryLimit
++			s.block(&f)
+ 			return 0, false
+ 		}
+-	} else if errors.Is(err, protocol.ErrWire) {
++		recovery.protocolRetries++
++		f.retries, f.limit = recovery.protocolRetries, protocolRetryLimit
++		delay := time.Second * time.Duration(1<<(recovery.protocolRetries-1))
++		s.mu.Lock()
++		s.state, s.category = "reconnecting", "protocol_error"
++		s.detail = "同步响应异常，正在有限重试；保留缓存会话和已保存的同步位置"
++		s.connection.NextStep = "等待本次同步重试结果；不会因此反复重新登录。"
++		s.reportFailureLocked(f, "retry_sync", delay)
++		s.mu.Unlock()
++		return delay, true
++	}
++	if f.class != "network" {
+ 		s.block(err)
+ 		return 0, false
+ 	}
+-	if recovery.retries < 6 {
+-		recovery.retries++
++	if operation == "authenticate" && recovery.authAttempts >= authenticationAttemptLimit {
++		f.reason, f.retries, f.limit = "authentication_retry_exhausted", recovery.authAttempts, authenticationAttemptLimit
++		s.block(&f)
++		return 0, false
++	}
++	if recovery.retries >= networkRetryLimit {
++		f.reason, f.retries, f.limit = "network_retry_exhausted", recovery.retries, networkRetryLimit
++		s.block(&f)
++		return 0, false
+ 	}
+-	delay := s.interval * time.Duration(1<<recovery.retries)
++	recovery.retries++
++	f.retries, f.limit = recovery.retries, networkRetryLimit
++	delay := max(s.interval, time.Second) * time.Duration(1<<recovery.retries)
+ 	if delay > 30*time.Second {
+ 		delay = 30 * time.Second
+ 	}
+@@ -62,6 +107,7 @@ func (s *Service) recoverFailure(err error, recovery *sessionRecovery) (time.Dur
+ 	}
+ 	s.category, s.code = "network_unavailable", 0
+ 	s.connection.NextStep = "网络恢复后会自动重试，暂时不需要重新登录。"
++	s.reportFailureLocked(f, "retry_network", delay)
+ 	s.mu.Unlock()
+ 	return delay, true
+ }
+diff --git a/internal/service/service.go b/internal/service/service.go
+index 8be44f8..3cf4961 100644
+--- a/internal/service/service.go
++++ b/internal/service/service.go
+@@ -59,6 +59,12 @@ type Service struct {
+ 	credential                    *credentialLogin
+ 	credentialAuth                func(context.Context, *protocol.Client) error
+ 	credentialClosed              bool
++	operation                     string
++	authenticateRPC               func(context.Context) error
++	syncRPC                       func(context.Context, uint32) (protocol.SyncResult, error)
++	checkpointWrite               func(*store.Data) error
++	recoveryWait                  func(context.Context, time.Duration) error
++	failureSink                   func(failureReport)
+ }
+ 
+ // Reserve a distinct epoch range for each runtime, including instances with
+@@ -159,7 +165,12 @@ func (s *Service) rpc(ctx context.Context) (context.Context, func()) {
+ 	s.mu.Unlock()
+ 	return c, func() { cancel(); s.mu.Lock(); s.cancelRPC = nil; s.mu.Unlock() }
+ }
+-func (s *Service) saveLocked() error {
++func (s *Service) saveLocked() (err error) {
++	defer func() {
++		if err != nil {
++			s.reportFailureLocked(classifyFailure(err, s.operation), "save_failed", 0)
++		}
++	}()
+ 	if s.data == nil || s.data.Session == nil {
+ 		return nil
+ 	}
+@@ -170,15 +181,15 @@ func (s *Service) saveLocked() error {
+ 	}
+ 	if s.history != nil {
+ 		if err := s.history.persistLocked(s); err != nil {
+-			return err
++			return storageFailure("history_commit", err)
+ 		}
+ 		restoreContacts, err := s.history.prepareContactCheckpoint(s.data)
+ 		if err != nil {
+-			return err
++			return storageFailure("contact_checkpoint", err)
+ 		}
+ 		defer restoreContacts()
+ 	}
+-	err := s.checkpoint.Save(s.data)
++	err = storageFailure("checkpoint", s.commitCheckpoint())
+ 	if err == nil {
+ 		s.persistedSequence = s.data.EventSequence
+ 	}
+@@ -320,6 +331,7 @@ func (s *Service) block(err error) {
+ }
+ 
+ func (s *Service) blockLocked(err error) {
++	defer s.describeBlockedLocked(err)
+ 	s.mode = "blocked"
+ 	s.state = "needs_attention"
+ 	s.detail = "连接未完成，缓存保留；可以选择重新扫码登录、从磁盘导入登录或离线查看"
+@@ -418,6 +430,7 @@ func (s *Service) run(ctx context.Context) {
+ 		if !prepared || fresh || reload {
+ 			// An explicit login or startup mode change starts a bounded attempt.
+ 			recovery = sessionRecovery{}
++			s.setOperation("prepare")
+ 			err := s.prepare(mode == "online", fresh)
+ 			prepared = true
+ 			s.mu.Lock()
+@@ -453,9 +466,14 @@ func (s *Service) run(ctx context.Context) {
+ 		call, done := s.rpc(ctx)
+ 		var err error
+ 		if s.client.State == nil || recovery.reauth {
++			s.setOperation("authenticate")
++			if !s.authenticationAllowed(&recovery) {
++				done()
++				continue
++			}
+ 			s.connectionPhase("authenticate")
+ 			s.count("auth")
+-			err = s.client.Authenticate(call)
++			err = s.authenticate(call)
+ 			if err == nil {
+ 				recovery.reauth = false
+ 				s.mu.Lock()
+@@ -469,21 +487,29 @@ func (s *Service) run(ctx context.Context) {
+ 				err = s.saveAuthenticationLocked()
+ 				s.mu.Unlock()
+ 				if err != nil {
+-					err = &protocol.Error{Category: "checkpoint_save_failed"}
++					err = s.retrySave(ctx, epoch, err)
++					if errors.Is(err, errRecoveryInterrupted) {
++						done()
++						continue
++					}
+ 				}
+ 			}
+ 		}
+ 		if err == nil {
++			s.setOperation("send")
+ 			err = s.sendQueued(call)
+ 		}
+ 		if err == nil {
++			s.setOperation("contacts")
+ 			err = s.refreshContacts(call)
+ 		}
+ 		if err == nil {
++			s.setOperation("download")
+ 			err = s.downloadQueued(call)
+ 		}
+ 		var result protocol.SyncResult
+ 		if err == nil {
++			s.setOperation("sync")
+ 			s.mu.RLock()
+ 			validating := s.state != "connected"
+ 			s.mu.RUnlock()
+@@ -491,7 +517,7 @@ func (s *Service) run(ctx context.Context) {
+ 				s.connectionPhase("sync")
+ 			}
+ 			s.count("sync")
+-			result, err = s.client.Sync(call, scene, nil)
++			result, err = s.sync(call, scene)
+ 		}
+ 		done()
+ 		if ctx.Err() != nil {
+@@ -504,15 +530,17 @@ func (s *Service) run(ctx context.Context) {
+ 			continue
+ 		}
+ 		if err != nil {
++			if f := classifyFailure(err, ""); f.class == "storage" && f.limit == 0 {
++				err = s.retrySave(ctx, epoch, err)
++				if err == nil || errors.Is(err, errRecoveryInterrupted) {
++					continue
++				}
++			}
+ 			delay, retry := s.recoverFailure(err, &recovery)
+ 			if !retry {
+ 				continue
+ 			}
+-			select {
+-			case <-ctx.Done():
+-			case <-s.wake:
+-			case <-time.After(delay):
+-			}
++			_ = s.waitRecovery(ctx, delay, epoch)
+ 			continue
+ 		}
+ 		s.mu.Lock()
+@@ -525,16 +553,22 @@ func (s *Service) run(ctx context.Context) {
+ 		s.ingestLocked(result)
+ 		err = s.saveLocked()
+ 		if err == nil {
+-			s.state = "connected"
+-			s.sessionState = "validated"
+-			s.lastSync = time.Now().Unix()
+-			s.connection.Stage, s.connection.NextStep = "connected", ""
+-			s.detail = ""
+-			s.category = ""
+-			s.code = 0
++			s.markSyncSuccessLocked()
+ 		}
+ 		mergedChanged := !bytes.Equal(old, s.data.Session.Cursor)
+ 		s.mu.Unlock()
++		if err != nil {
++			err = s.retrySave(ctx, epoch, err)
++			s.mu.Lock()
++			active := s.activeEpochLocked(epoch)
++			if active && err == nil {
++				s.markSyncSuccessLocked()
++			}
++			s.mu.Unlock()
++			if !active || errors.Is(err, errRecoveryInterrupted) {
++				continue
++			}
++		}
+ 		if err != nil {
+ 			s.block(err)
+ 			continue
+@@ -1005,6 +1039,10 @@ func (s *Service) sendQueued(ctx context.Context) error {
+ 		job.Status = "sending"
+ 		job.Attempts++
+ 		if e := s.saveLocked(); e != nil {
++			// No send happened: retain a retryable queue entry rather than
++			// persisting an orphaned "sending" record during save recovery.
++			job.Status = "queued"
++			job.Attempts--
+ 			s.mu.Unlock()
+ 			return e
+ 		}

@@ -59,6 +59,12 @@ type Service struct {
 	credential                    *credentialLogin
 	credentialAuth                func(context.Context, *protocol.Client) error
 	credentialClosed              bool
+	operation                     string
+	authenticateRPC               func(context.Context) error
+	syncRPC                       func(context.Context, uint32) (protocol.SyncResult, error)
+	checkpointWrite               func(*store.Data) error
+	recoveryWait                  func(context.Context, time.Duration) error
+	failureSink                   func(failureReport)
 }
 
 // Reserve a distinct epoch range for each runtime, including instances with
@@ -159,7 +165,12 @@ func (s *Service) rpc(ctx context.Context) (context.Context, func()) {
 	s.mu.Unlock()
 	return c, func() { cancel(); s.mu.Lock(); s.cancelRPC = nil; s.mu.Unlock() }
 }
-func (s *Service) saveLocked() error {
+func (s *Service) saveLocked() (err error) {
+	defer func() {
+		if err != nil {
+			s.reportFailureLocked(classifyFailure(err, s.operation), "save_failed", 0)
+		}
+	}()
 	if s.data == nil || s.data.Session == nil {
 		return nil
 	}
@@ -170,15 +181,15 @@ func (s *Service) saveLocked() error {
 	}
 	if s.history != nil {
 		if err := s.history.persistLocked(s); err != nil {
-			return err
+			return storageFailure("history_commit", err)
 		}
 		restoreContacts, err := s.history.prepareContactCheckpoint(s.data)
 		if err != nil {
-			return err
+			return storageFailure("contact_checkpoint", err)
 		}
 		defer restoreContacts()
 	}
-	err := s.checkpoint.Save(s.data)
+	err = storageFailure("checkpoint", s.commitCheckpoint())
 	if err == nil {
 		s.persistedSequence = s.data.EventSequence
 	}
@@ -320,6 +331,7 @@ func (s *Service) block(err error) {
 }
 
 func (s *Service) blockLocked(err error) {
+	defer s.describeBlockedLocked(err)
 	s.mode = "blocked"
 	s.state = "needs_attention"
 	s.detail = "连接未完成，缓存保留；可以选择重新扫码登录、从磁盘导入登录或离线查看"
@@ -418,6 +430,7 @@ func (s *Service) run(ctx context.Context) {
 		if !prepared || fresh || reload {
 			// An explicit login or startup mode change starts a bounded attempt.
 			recovery = sessionRecovery{}
+			s.setOperation("prepare")
 			err := s.prepare(mode == "online", fresh)
 			prepared = true
 			s.mu.Lock()
@@ -453,9 +466,14 @@ func (s *Service) run(ctx context.Context) {
 		call, done := s.rpc(ctx)
 		var err error
 		if s.client.State == nil || recovery.reauth {
+			s.setOperation("authenticate")
+			if !s.authenticationAllowed(&recovery) {
+				done()
+				continue
+			}
 			s.connectionPhase("authenticate")
 			s.count("auth")
-			err = s.client.Authenticate(call)
+			err = s.authenticate(call)
 			if err == nil {
 				recovery.reauth = false
 				s.mu.Lock()
@@ -469,21 +487,29 @@ func (s *Service) run(ctx context.Context) {
 				err = s.saveAuthenticationLocked()
 				s.mu.Unlock()
 				if err != nil {
-					err = &protocol.Error{Category: "checkpoint_save_failed"}
+					err = s.retrySave(ctx, epoch, err)
+					if errors.Is(err, errRecoveryInterrupted) {
+						done()
+						continue
+					}
 				}
 			}
 		}
 		if err == nil {
+			s.setOperation("send")
 			err = s.sendQueued(call)
 		}
 		if err == nil {
+			s.setOperation("contacts")
 			err = s.refreshContacts(call)
 		}
 		if err == nil {
+			s.setOperation("download")
 			err = s.downloadQueued(call)
 		}
 		var result protocol.SyncResult
 		if err == nil {
+			s.setOperation("sync")
 			s.mu.RLock()
 			validating := s.state != "connected"
 			s.mu.RUnlock()
@@ -491,7 +517,7 @@ func (s *Service) run(ctx context.Context) {
 				s.connectionPhase("sync")
 			}
 			s.count("sync")
-			result, err = s.client.Sync(call, scene, nil)
+			result, err = s.sync(call, scene)
 		}
 		done()
 		if ctx.Err() != nil {
@@ -504,15 +530,17 @@ func (s *Service) run(ctx context.Context) {
 			continue
 		}
 		if err != nil {
+			if f := classifyFailure(err, ""); f.class == "storage" && f.limit == 0 {
+				err = s.retrySave(ctx, epoch, err)
+				if err == nil || errors.Is(err, errRecoveryInterrupted) {
+					continue
+				}
+			}
 			delay, retry := s.recoverFailure(err, &recovery)
 			if !retry {
 				continue
 			}
-			select {
-			case <-ctx.Done():
-			case <-s.wake:
-			case <-time.After(delay):
-			}
+			_ = s.waitRecovery(ctx, delay, epoch)
 			continue
 		}
 		s.mu.Lock()
@@ -525,16 +553,22 @@ func (s *Service) run(ctx context.Context) {
 		s.ingestLocked(result)
 		err = s.saveLocked()
 		if err == nil {
-			s.state = "connected"
-			s.sessionState = "validated"
-			s.lastSync = time.Now().Unix()
-			s.connection.Stage, s.connection.NextStep = "connected", ""
-			s.detail = ""
-			s.category = ""
-			s.code = 0
+			s.markSyncSuccessLocked()
 		}
 		mergedChanged := !bytes.Equal(old, s.data.Session.Cursor)
 		s.mu.Unlock()
+		if err != nil {
+			err = s.retrySave(ctx, epoch, err)
+			s.mu.Lock()
+			active := s.activeEpochLocked(epoch)
+			if active && err == nil {
+				s.markSyncSuccessLocked()
+			}
+			s.mu.Unlock()
+			if !active || errors.Is(err, errRecoveryInterrupted) {
+				continue
+			}
+		}
 		if err != nil {
 			s.block(err)
 			continue
@@ -1005,6 +1039,10 @@ func (s *Service) sendQueued(ctx context.Context) error {
 		job.Status = "sending"
 		job.Attempts++
 		if e := s.saveLocked(); e != nil {
+			// No send happened: retain a retryable queue entry rather than
+			// persisting an orphaned "sending" record during save recovery.
+			job.Status = "queued"
+			job.Attempts--
 			s.mu.Unlock()
 			return e
 		}

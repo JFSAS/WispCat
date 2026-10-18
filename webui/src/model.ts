@@ -34,6 +34,11 @@ export function statusLabel(state?: string): string {
         recovering: "恢复中",
         connecting: "连接中",
         reconnecting: "重连中",
+        saving_retry: "正在重试保存",
+        network_unavailable: "网络不可用",
+        needs_attention: "需要处理",
+        needs_login: "需要登录",
+        needs_setup: "需要配置",
         disconnected: "未连接",
         waiting_account: "等待账号登录",
         waiting_confirmation: "待确认",
@@ -63,7 +68,7 @@ export function statusLabel(state?: string): string {
 export const statusTone = (state?: string): "" | "good" | "warn" | "error" =>
   ["connected", "validated", "authenticated", "listening"].includes(state || "")
     ? "good"
-    : ["failed", "error", "scope_changed", "degraded"].includes(state || "")
+    : ["failed", "error", "scope_changed", "degraded", "needs_attention", "needs_login", "needs_setup"].includes(state || "")
       ? "error"
       : [
             "logging_in",
@@ -71,6 +76,8 @@ export const statusTone = (state?: string): "" | "good" | "warn" | "error" =>
             "recovering",
             "connecting",
             "reconnecting",
+            "saving_retry",
+            "network_unavailable",
             "waiting_account",
             "waiting_confirmation",
             "authenticating",

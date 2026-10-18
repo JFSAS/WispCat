@@ -11,14 +11,15 @@ import (
 )
 
 type connectionAttempt struct {
-	ID                 uint64 `json:"attempt_id"`
-	StartedAt          int64  `json:"started_at"`
-	Source             string `json:"source"`
-	Stage              string `json:"stage"`
-	DiskRead           string `json:"disk_read"`
-	TicketMatchesCache *bool  `json:"ticket_matches_cache,omitempty"`
-	AuthReason         string `json:"auth_reason,omitempty"`
-	NextStep           string `json:"next_step"`
+	ID                 uint64         `json:"attempt_id"`
+	StartedAt          int64          `json:"started_at"`
+	Source             string         `json:"source"`
+	Stage              string         `json:"stage"`
+	DiskRead           string         `json:"disk_read"`
+	TicketMatchesCache *bool          `json:"ticket_matches_cache,omitempty"`
+	AuthReason         string         `json:"auth_reason,omitempty"`
+	NextStep           string         `json:"next_step"`
+	Failure            *failureReport `json:"last_error,omitempty"`
 }
 
 func (s *Service) beginConnectionLocked(source, stage string) {

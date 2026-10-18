@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/JFSAS/wispcat/internal/native"
 	"github.com/JFSAS/wispcat/internal/protocol"
 	"github.com/JFSAS/wispcat/internal/store"
 )
@@ -73,8 +75,8 @@ func TestRejectedIndependentTicketRequiresQRAndKeepsOriginOnRestart(t *testing.T
 func TestNetworkOutageKeepsCacheAndContinuesAutomaticRecovery(t *testing.T) {
 	s := recoveryFixture(t)
 	r := sessionRecovery{}
-	for range 12 {
-		delay, retry := s.recoverFailure(errors.New("synthetic transport outage"), &r)
+	for range 6 {
+		delay, retry := s.recoverFailure(io.ErrUnexpectedEOF, &r)
 		status := s.Status()
 		if !retry || delay > 30*time.Second || delay <= 0 || status["mode"] != "online" || status["session_state"] != "validated" || status["last_sync_at"] != int64(123456) {
 			t.Fatal("network outage invalidated a credential or stopped automatic recovery")
@@ -86,6 +88,32 @@ func TestNetworkOutageKeepsCacheAndContinuesAutomaticRecovery(t *testing.T) {
 	if s.state != "network_unavailable" {
 		t.Fatal("persistent network outage was mislabeled as disconnected")
 	}
+	if _, retry := s.recoverFailure(io.ErrUnexpectedEOF, &r); retry || s.mode != "blocked" || s.data.SessionInvalid {
+		t.Fatal("network retries did not stop at their bound while retaining the cache")
+	}
+}
+
+func TestSyncProtocolFailureHasBoundedRecovery(t *testing.T) {
+	s := recoveryFixture(t)
+	s.mode, s.connection.Stage = "online", "sync"
+	r := sessionRecovery{}
+	for i := 0; i < 3; i++ {
+		delay, retry := s.recoverFailure(protocol.ErrWire, &r)
+		if retry != (i < 2) || (retry && delay <= 0) || s.data.SessionInvalid {
+			t.Fatalf("sync protocol failure %d: retry=%v delay=%v state=%s", i+1, retry, delay, s.state)
+		}
+	}
+	if s.mode != "blocked" || s.category != "protocol_retry_exhausted" {
+		t.Fatal("persistent malformed responses did not stop with a specific error")
+	}
+}
+
+func TestCertificateFailureDoesNotRetryOrInvalidateCache(t *testing.T) {
+	s := recoveryFixture(t)
+	_, retry := s.recoverFailure(&native.ExchangeError{Stage: "verify_certificate", Retryable: false}, &sessionRecovery{})
+	if retry || s.mode != "blocked" || s.data.SessionInvalid {
+		t.Fatal("untrusted TLS peer was retried or treated as rejected credentials")
+	}
 }
 
 func TestExpiredSessionRefreshesCacheBeforeDeclaringDisconnected(t *testing.T) {
@@ -95,7 +123,7 @@ func TestExpiredSessionRefreshesCacheBeforeDeclaringDisconnected(t *testing.T) {
 	if !retry || delay != 0 || !r.reauth || s.state != "recovering" || s.data.SessionInvalid {
 		t.Fatal("expired session did not first use its cached automatic-login ticket")
 	}
-	_, retry = s.recoverFailure(errors.New("synthetic auth network outage"), &r)
+	_, retry = s.recoverFailure(io.ErrUnexpectedEOF, &r)
 	if !retry || !r.reauth || s.state != "recovering" || s.data.SessionInvalid {
 		t.Fatal("temporary reauthentication failure was treated as a rejected ticket")
 	}

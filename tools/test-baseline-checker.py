@@ -11,7 +11,8 @@ with tempfile.TemporaryDirectory(prefix='wechat-baseline-verifier-') as raw:
     root = Path(raw)
     paths = set(json.loads((source/'provenance/main-baseline.json').read_text())['files'])
     paths.update({'tools/check_baseline.py', 'provenance/main-baseline.json',
-                  'provenance/intentional-test-changes.json', 'provenance/runtime-integrations.json'})
+                  'provenance/intentional-test-changes.json', 'provenance/runtime-integrations.json',
+                  'provenance/runtime-recovery.patch'})
     for name in paths:
         target = root/name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -38,4 +39,11 @@ with tempfile.TemporaryDirectory(prefix='wechat-baseline-verifier-') as raw:
                 item[0]['before_line'] = -1
         manifest.write_text(json.dumps(values))
         check(False)
-print('Baseline verifier regression: 1 valid candidate accepted; 4 invalid declarations rejected')
+    manifest.write_text(valid)
+    for name in ['internal/protocol/client.go', 'internal/protocol/wire.go']:
+        target = root/name
+        original = target.read_bytes()
+        target.write_bytes(original + b'\n// Unreviewed protocol change must fail.\n')
+        check(False)
+        target.write_bytes(original)
+print('Baseline verifier regression: audited candidate accepted; 6 invalid candidates rejected')

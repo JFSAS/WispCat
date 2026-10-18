@@ -2,5 +2,9 @@
   "internal/service/media_transfer_test.go": {
     "sha256": "b364929b2a513a61715ea409aef0fc5b5516cdd2a67a21cf8d199d4fbb2df8fb",
     "reason": "Remove two model-layer integration tests and their unused imports; retain protocol/media transfer tests without importing a reply provider."
+  },
+  "internal/service/recovery_test.go": {
+    "sha256": "e771634fd55fde478e208687ab2956f014a1e36cc34c22cac8100a25c2acf545",
+    "reason": "Bound network recovery, permit two validated Sync protocol retries, and stop on certificate errors without rejecting cached credentials."
   }
 }

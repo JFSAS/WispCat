@@ -35,6 +35,9 @@ func (c *Client) exchange(ctx context.Context, command uint16, path string, pack
 	if e != nil {
 		return zero, nil, e
 	}
+	if e = validateHTTPResponse(raw); e != nil {
+		return zero, nil, e
+	}
 	resp, e := http.ReadResponse(bufio.NewReader(bytes.NewReader(raw)), nil)
 	if e != nil {
 		return zero, nil, ErrWire

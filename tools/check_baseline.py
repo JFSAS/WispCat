@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import tempfile
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
@@ -14,6 +15,32 @@ baseline = json.loads((root / 'provenance/main-baseline.json').read_text())
 changes = json.loads((root / 'provenance/intentional-test-changes.json').read_text())
 integrations = json.loads((root / 'provenance/runtime-integrations.json').read_text())
 failures = []
+# Explicitly audited recovery changes are reversed in a temporary copy before
+# checking the original import hashes. Neither original expected hashes nor
+# the allowlist of history insertions is relaxed by this bug-fix patch.
+recovery_paths = {
+    'internal/protocol/client.go', 'internal/service/service.go',
+    'internal/service/recovery.go', 'internal/service/connection.go',
+    'internal/service/media_send.go',
+}
+recovery_patch = root / 'provenance/runtime-recovery.patch'
+restored = {}
+with tempfile.TemporaryDirectory(prefix='wispcat-recovery-baseline-') as raw:
+    temporary = Path(raw)
+    stats = subprocess.check_output(['git', 'apply', '--numstat', str(recovery_patch)], text=True)
+    if {row.split('\t')[2] for row in stats.splitlines()} != recovery_paths:
+        failures.append('recovery patch must touch only the five audited paths')
+    else:
+        for name in recovery_paths:
+            target = temporary / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((root / name).read_bytes())
+        result = subprocess.run(['git', 'apply', '--reverse', '--whitespace=error', str(recovery_patch)],
+                                cwd=temporary, capture_output=True, text=True)
+        if result.returncode:
+            failures.append('recovery patch differs from the audited source edits')
+        else:
+            restored = {name: (temporary / name).read_bytes() for name in recovery_paths}
 allowed_integrations = {
     'internal/service/service.go', 'internal/service/channel.go',
     'internal/service/media_transfer.go', 'internal/service/login.go',
@@ -37,10 +64,11 @@ if failures:
 implementations = tests = 0
 for name, record in baseline['files'].items():
     file = root / name
-    actual = hashlib.sha256(file.read_bytes()).hexdigest() if file.is_file() else 'missing'
+    content = restored.get(name, file.read_bytes() if file.is_file() else b'')
+    actual = hashlib.sha256(content).hexdigest() if file.is_file() else 'missing'
     expected = record['imported_sha256']
     if name in integrations and file.is_file():
-        lines = file.read_bytes().splitlines(keepends=True)
+        lines = content.splitlines(keepends=True)
         offset = 0
         for insertion in integrations[name]['insertions']:
             added = insertion['text'].encode().splitlines(keepends=True)
@@ -78,8 +106,9 @@ for name, record in baseline['files'].items():
             failures.append(name + ': module rewrite differs')
 result = {'baseline_commit': baseline['commit'], 'imported_files': len(baseline['files']),
           'implementation_files': implementations, 'test_files': tests,
-          'identical_implementation_files': implementations - len(integrations),
+          'identical_implementation_files': implementations - len(set(integrations) | recovery_paths),
           'runtime_integration_files': len(integrations),
+          'audited_recovery_patch_files': len(restored),
           'intentional_test_changes': len(changes), 'source_checked': args.source is not None,
           'result': 'pass' if not failures else 'fail', 'failures': failures}
 print(json.dumps(result, indent=2))

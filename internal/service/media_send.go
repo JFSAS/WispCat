@@ -210,6 +210,8 @@ func (s *Service) sendMediaQueued(ctx context.Context, id string) error {
 	j.Media.Stage = "uploading"
 	j.Attempts++
 	if err := s.saveLocked(); err != nil {
+		j.Status, j.Media.Stage = "queued", "queued"
+		j.Attempts--
 		s.mu.Unlock()
 		return err
 	}
