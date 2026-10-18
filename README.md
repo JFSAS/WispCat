@@ -3,8 +3,10 @@
 <p align="center">独立微信协议运行时 · OneBot v11 · WebUI · Go SDK · MCP · Alpha 开发预览</p>
 <p align="center">
   <a href="#下载发行包">下载</a> ·
+  <a href="#架构与运行链路">架构</a> ·
   <a href="#管理界面">界面预览</a> ·
   <a href="#快速开始">快速开始</a> ·
+  <a href="docs/usage.md">完整使用指南</a> ·
   <a href="#登录与凭证迁移">登录与凭证迁移</a> ·
   <a href="#接入机器人">接入机器人</a> ·
   <a href="#授权与免责声明">授权与免责声明</a>
@@ -29,12 +31,9 @@ WispCat 将微信协议与机器人业务分开：由独立进程维护账号、
 | 可靠性接口 | 请求幂等、投递回执、按请求查询投递结果、持久事件编号 |
 | 外部接入 | Go SDK、独立消费者示例、可按读写权限配置的 stdio MCP 服务 |
 
-```text
-微信协议与账号 → WispCat → OneBot 动作 / 事件 → NoneBot / AstrBot / 自定义程序
-                       └→ Go SDK / MCP
-```
-
-**当前版本为 `0.1.0-alpha.2`（Alpha 开发预览）。** 已完成 macOS／Linux 的离线检查，并在 Linux 上验证过缓存恢复登录、
+**最近公开发行版为 `v0.1.0-alpha.2`（Alpha 开发预览）。** `main` 还包含该版之后的恢复与诊断修复；
+本文的有限重试、`connection.last_error` 等说明以当前 `main` 为准，旧发行包的能力请同时核对 Release 说明。
+已完成 macOS／Linux 的离线检查，并在 Linux 上验证过缓存恢复登录、
 消息同步和 AstrBot 对接。开发检查使用合成账号与回环服务；这些结果不代表长期稳定性、
 全部微信功能或完整 OneBot 标准均已验证。
 
@@ -42,6 +41,17 @@ WispCat 将微信协议与机器人业务分开：由独立进程维护账号、
 联系人和群成员接口返回已观察到的资料；引用／撤回、语音视频、完整群成员列表和群管理尚未实现。
 不支持的操作会明确拒绝。图片传输与模型识图是两层能力，实际效果还取决于下游框架和模型；
 真实微信图片到模型再回复的完整链路尚未完成验收。
+
+## 架构与运行链路
+
+[![WispCat 架构：账号与凭证、微信协议运行时、OneBot 接口、外部机器人](assets/readme/architecture.svg)](assets/readme/architecture.svg)
+
+WispCat 独立维护微信账号与协议，通过 OneBot 向外提供动作、事件和媒体获取。
+管理页面负责运行时配置，AstrBot／NoneBot 等消费者负责群聊背景、模型、角色、插件和工具权限。
+多个账号分别保存登录缓存、历史和投递状态；消费者可以独立启动、升级或更换。
+
+布局参考 [SnowLuma 的运行链路图](https://github.com/SnowLuma/SnowLuma/blob/87527cb7641a5a42f8f0efb73cb066102e004dee/assets/readme/runtime-map.svg)，
+图中组件按 WispCat 实际职责重新绘制。[SVG 图源](assets/readme/architecture.svg) · [Mermaid 结构源](assets/readme/architecture.mmd)。
 
 ## 管理界面
 
@@ -54,6 +64,9 @@ WispCat 将微信协议与机器人业务分开：由独立进程维护账号、
 | [![AstrBot 和 NoneBot 连接表单](assets/readme/connections.jpg)](assets/readme/connections.jpg) | [![深色主题下的存储维护面板](assets/readme/storage-dark.jpg)](assets/readme/storage-dark.jpg) |
 
 ## 快速开始
+
+首次使用建议配合[完整使用指南](docs/usage.md)：包含持久保存令牌、配置字段解释、
+Mac → Linux 凭证迁移、AstrBot／NoneBot 接入、管理页保存与应用、多账号、备份升级和故障排查。
 
 ### 下载发行包
 
@@ -87,6 +100,7 @@ cp wispcat.example.json wispcat.local.json
 export WISPCAT_ADMIN_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
 export WISPCAT_ONEBOT_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
 export WISPCAT_BOT_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+export WISPCAT_ASTRBOT_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
 ./wispcat check --config wispcat.local.json
 printf '管理令牌：%s\n' "$WISPCAT_ADMIN_TOKEN"
 ./wispcat serve --config wispcat.local.json
@@ -94,6 +108,7 @@ printf '管理令牌：%s\n' "$WISPCAT_ADMIN_TOKEN"
 
 打开 `http://127.0.0.1:5099/`，输入上方管理令牌。默认示例账号为离线状态；
 将令牌保存到你的私有启动环境，配置下游时同步对应令牌。
+需要跨终端或重启保留令牌时，按[指南中的环境文件示例](docs/usage.md#2-保存启动令牌)设置。
 macOS 包另含 `wispcat-credentials`，可按下方说明提取 Mac 凭证；Linux 通过管理页上传加密文件登录。
 
 ### 从源码构建
@@ -116,6 +131,7 @@ cp wispcat.example.json wispcat.local.json
 export WISPCAT_ADMIN_TOKEN="$(openssl rand -hex 32)"
 export WISPCAT_ONEBOT_TOKEN="$(openssl rand -hex 32)"
 export WISPCAT_BOT_TOKEN="$(openssl rand -hex 32)"
+export WISPCAT_ASTRBOT_TOKEN="$(openssl rand -hex 32)"
 ./.bin/wispcat check --config wispcat.local.json
 ./.bin/wispcat serve --config wispcat.local.json
 ```
@@ -187,6 +203,8 @@ ssh -N -L 127.0.0.1:5099:127.0.0.1:5099 user@linux-host
 凭证或本机私有路径。处理磁盘、网络或协议问题后，可在管理页恢复上线；不会自动无限登录。
 
 ## 接入机器人
+
+逐步操作见[接入 AstrBot](docs/usage.md#接入-astrbot)和[接入 NoneBot](docs/usage.md#接入-nonebot)。
 
 `wispcat.example.json` 中的 `reverse[].url` 指向机器人框架的反向 WebSocket 地址，
 `token_env` 指定保存下游令牌的环境变量。常见配置如下，实际端口与令牌以框架设置为准：

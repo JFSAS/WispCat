@@ -1,0 +1,25 @@
+flowchart LR
+  accTitle: WispCat 系统架构
+  accDescr: WispCat 负责微信协议、账号和媒体；外部消费者负责业务、模型与工具权限。
+  subgraph runtime["WispCat 独立进程 · macOS / Linux"]
+    account["账号与凭证<br/>缓存恢复 · 扫码 · 加密文件导入"]
+    protocol["微信协议运行时<br/>会话 · 同步 · 消息收发 · 媒体"]
+    onebot["OneBot v11<br/>HTTP / WebSocket · 动作 / 事件"]
+    manage["管理页面 / 管理 API<br/>账号 · 登录 · 连接 · 存储维护"]
+    state[("按账号隔离的加密存储<br/>凭证 · 历史 · 投递状态")]
+    account <--> protocol
+    protocol <--> onebot
+    manage -.-> protocol
+    manage -.-> onebot
+    protocol --- state
+  end
+  consumer["外部消费者<br/>AstrBot · NoneBot · Go SDK · stdio MCP"]
+  capabilities["下游能力<br/>群聊背景 · 角色 · 模型服务<br/>插件 · 工具权限与沙箱"]
+  onebot <--> consumer
+  consumer --- capabilities
+  classDef core fill:#eef2ff,stroke:#818cf8,color:#312e81
+  classDef support fill:#f1f5f9,stroke:#94a3b8,color:#334155
+  classDef external fill:#16243d,stroke:#818cf8,color:#f8fafc
+  class account,protocol,onebot core
+  class manage,state support
+  class consumer,capabilities external

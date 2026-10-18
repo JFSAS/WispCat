@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="620" viewBox="0 0 1280 620" role="img" aria-labelledby="architecture-title architecture-desc">
+<title id="architecture-title">WispCat 系统架构</title>
+<desc id="architecture-desc">微信账号与凭证经过 WispCat 独立协议运行时，再通过 OneBot v11 对接 AstrBot、NoneBot、Go SDK 与 MCP。运行时提供管理页面及账号隔离的加密存储，模型与工具权限由外部消费者负责。</desc>
+<!-- Layout authored as SVG; architecture.mmd records the component relationships. -->
+<defs>
+<style>text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif}</style>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#8190ae" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+</defs>
+<rect x="1" y="1" width="1278" height="618" rx="24" fill="#f7f9fe" stroke="#dce3ef" stroke-width="1.5"/>
+<rect x="40" y="38" width="5" height="66" rx="2.5" fill="#6366f1"/>
+<text x="61" y="64" font-size="31" fill="#172554" font-weight="760" text-anchor="start">WispCat</text>
+<text x="61" y="96" font-size="18" fill="#64748b" font-weight="400" text-anchor="start">从微信会话到机器人应用</text>
+<text x="1232" y="58" font-size="12" fill="#818ca4" font-weight="650" text-anchor="end">SYSTEM ARCHITECTURE</text>
+<text x="1232" y="88" font-size="14" fill="#64748b" font-weight="400" text-anchor="end">独立协议运行时 · OneBot v11 · 多进程协作</text>
+<path d="M48 155V145H926V155" fill="none" stroke="#b7c2dc" stroke-width="1.5"/>
+<rect x="344" y="133" width="286" height="25" rx="12" fill="#e9edff"/>
+<text x="487" y="150" font-size="13" fill="#555bc2" font-weight="650" text-anchor="middle">WispCat 独立进程 · macOS / Linux</text>
+<text x="1099" y="150" font-size="13" fill="#64748b" font-weight="650" text-anchor="middle">外部消费者 · 独立进程</text>
+<rect x="48" y="176" width="266" height="250" rx="18" fill="#ffffff" stroke="#d5ddec" stroke-width="1.5"/>
+<rect x="68" y="196" width="34" height="27" rx="8" fill="#e6f7f2"/>
+<text x="85" y="215" font-size="12" fill="#16836b" font-weight="650" text-anchor="middle">01</text>
+<text x="114" y="215" font-size="12" fill="#16836b" font-weight="650" text-anchor="start">账号与凭证</text>
+<rect x="70" y="244" width="222" height="55" rx="12" fill="#f1faf7"/>
+<text x="181" y="267" font-size="14" fill="#16836b" font-weight="650" text-anchor="middle">微信账号 A</text>
+<text x="181" y="288" font-size="12" fill="#16836b" font-weight="400" text-anchor="middle">微信账号 B · 独立实例</text>
+<text x="70" y="334" font-size="23" fill="#172554" font-weight="700" text-anchor="start">微信账号</text>
+<text x="70" y="363" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">缓存恢复 · 扫码登录</text>
+<text x="70" y="389" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">导入 Mac 导出的加密凭证</text>
+<rect x="354" y="176" width="266" height="250" rx="18" fill="#ffffff" stroke="#d5ddec" stroke-width="1.5"/>
+<rect x="374" y="196" width="34" height="27" rx="8" fill="#eeecff"/>
+<text x="391" y="215" font-size="12" fill="#655bd0" font-weight="650" text-anchor="middle">02</text>
+<text x="420" y="215" font-size="12" fill="#655bd0" font-weight="650" text-anchor="start">协议运行</text>
+<rect x="376" y="244" width="222" height="55" rx="12" fill="#f2f0ff"/>
+<text x="487" y="267" font-size="14" fill="#655bd0" font-weight="650" text-anchor="middle">SESSION / SYNC</text>
+<text x="487" y="288" font-size="12" fill="#655bd0" font-weight="400" text-anchor="middle">私聊 · 群聊 · 图片与文件</text>
+<text x="376" y="334" font-size="23" fill="#172554" font-weight="700" text-anchor="start">收发与会话</text>
+<text x="376" y="363" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">协议同步 · 媒体传输</text>
+<text x="376" y="389" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">加密缓存 · 有限故障恢复</text>
+<rect x="660" y="176" width="266" height="250" rx="18" fill="#ffffff" stroke="#d5ddec" stroke-width="1.5"/>
+<rect x="680" y="196" width="34" height="27" rx="8" fill="#eaf1ff"/>
+<text x="697" y="215" font-size="12" fill="#4a70bd" font-weight="650" text-anchor="middle">03</text>
+<text x="726" y="215" font-size="12" fill="#4a70bd" font-weight="650" text-anchor="start">接口标准化</text>
+<rect x="682" y="244" width="222" height="55" rx="12" fill="#eff4ff"/>
+<text x="793" y="267" font-size="18" fill="#4a70bd" font-weight="650" text-anchor="middle">OneBot v11</text>
+<text x="793" y="288" font-size="12" fill="#4a70bd" font-weight="400" text-anchor="middle">HTTP / WebSocket</text>
+<text x="682" y="334" font-size="23" fill="#172554" font-weight="700" text-anchor="start">统一动作与事件</text>
+<text x="682" y="363" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">消息段 · 编号映射 · 媒体获取</text>
+<text x="682" y="389" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">持久事件 · 请求幂等 · 投递回执</text>
+<rect x="966" y="176" width="266" height="250" rx="18" fill="#16243d" stroke="#8190c5" stroke-width="1.5"/>
+<rect x="986" y="196" width="34" height="27" rx="8" fill="#303e62"/>
+<text x="1003" y="215" font-size="12" fill="#c1cbf7" font-weight="650" text-anchor="middle">04</text>
+<text x="1032" y="215" font-size="12" fill="#b7c4de" font-weight="650" text-anchor="start">机器人与自动化</text>
+<text x="988" y="266" font-size="22" fill="#f8faff" font-weight="700" text-anchor="start">AstrBot · NoneBot</text>
+<rect x="988" y="287" width="101" height="34" rx="9" fill="#25395a" stroke="#45618b" stroke-width="1.5"/>
+<text x="1038.5" y="309" font-size="13" fill="#d7e2fc" font-weight="400" text-anchor="middle">Go SDK</text>
+<rect x="1101" y="287" width="109" height="34" rx="9" fill="#363254" stroke="#645c91" stroke-width="1.5"/>
+<text x="1155.5" y="309" font-size="13" fill="#d7e2fc" font-weight="400" text-anchor="middle">stdio MCP</text>
+<text x="988" y="361" font-size="15" fill="#c0cbe0" font-weight="400" text-anchor="start">角色 · 插件 · 原生群聊背景</text>
+<text x="988" y="389" font-size="15" fill="#c0cbe0" font-weight="400" text-anchor="start">模型调用 · 工具权限与沙箱</text>
+<path d="M322 301H346" fill="none" stroke="#8190ae" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+<path d="M628 301H652" fill="none" stroke="#8190ae" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+<path d="M934 301H958" fill="none" stroke="#8190ae" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+<path d="M487 426V456" fill="none" stroke="#b3bfd2" stroke-width="1.5" stroke-dasharray="4 4"/>
+<path d="M1099 426V456" fill="none" stroke="#b3bfd2" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="48" y="456" width="572" height="100" rx="14" fill="#eef2fb" stroke="#dce3f0" stroke-width="1.5"/>
+<text x="68" y="485" font-size="16" fill="#405577" font-weight="700" text-anchor="start">管理与持久化</text>
+<text x="68" y="511" font-size="14" fill="#64748b" font-weight="400" text-anchor="start">WebUI / 管理 API：账号、登录、连接与存储维护</text>
+<text x="68" y="535" font-size="14" fill="#64748b" font-weight="400" text-anchor="start">按账号隔离保存凭证、消息历史与投递状态</text>
+<rect x="660" y="456" width="572" height="100" rx="14" fill="#eef2fb" stroke="#dce3f0" stroke-width="1.5"/>
+<text x="680" y="485" font-size="16" fill="#405577" font-weight="700" text-anchor="start">模型与执行环境</text>
+<text x="680" y="511" font-size="14" fill="#64748b" font-weight="400" text-anchor="start">外部机器人框架对接模型服务，管理插件及工具执行权限</text>
+<text x="680" y="535" font-size="14" fill="#64748b" font-weight="400" text-anchor="start">AstrBot 原生群背景：图片描述 → 后续请求的文字背景</text>
+<text x="48" y="591" font-size="13" fill="#64748b" font-weight="400" text-anchor="start">主链路：接收消息形成事件；消费者调用动作，交由运行时发送微信消息。</text>
+<text x="1232" y="591" font-size="12" fill="#8a96ae" font-weight="650" text-anchor="end">WISPCAT / ALPHA PREVIEW</text>
+</svg>
