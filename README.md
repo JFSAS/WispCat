@@ -214,9 +214,15 @@ HTTP 动作支持 GET、JSON POST 和表单；正向 WebSocket 支持 `/`、`/ap
 混合发送最多拆成 20 条原生消息，媒体合计最多 16 MiB；上传／下载单块最多 256 KiB。
 临时引用按账号隔离，不跨进程重启保留。
 
-[AstrBot 群聊适配](integrations/astrbot/)提供仅被 @ 时触发、忽略 @ 全体成员、
-携带上次 @ 之后最多 1000 条背景消息的策略。安装器针对 AstrBot 4.29.0 的已校验源码，
-不适用于任意版本；工具执行权限、沙箱、模型和联网搜索仍需在 AstrBot 中单独配置。
+群聊使用 AstrBot 原生流程，无需修改 AstrBot 源码。以已验证的 AstrBot 4.29.0 为例，
+在 AstrBot 中开启群聊上下文（`provider_ltm_settings.group_icl_enable`），
+将 `group_message_max_cnt` 设为 1000，并开启 `platform_settings.ignore_at_all`。
+需要理解此前图片时，开启 `image_caption` 并指定支持图片的 `image_caption_provider_id`；
+原生流程在图片到达时生成描述，再把描述附到后续模型请求的文字背景中。
+
+原生唤醒支持直接 @、引用机器人消息、唤醒前缀和插件命令；群聊背景按模型请求边界消费，
+这版原生背景缓存在内存中。单独一个 @ 默认进入等待后续内容的流程。
+主动回复、工具权限、沙箱、角色、模型和联网搜索均在 AstrBot 中管理。
 
 ## Go SDK 与 MCP
 
