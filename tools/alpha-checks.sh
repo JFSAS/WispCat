@@ -26,7 +26,7 @@ run_offline sh tools/go.sh test -count=1 \
   ./cmd/wispcat-credentials ./internal/credentials ./internal/host \
   ./internal/onebot ./internal/mcp ./internal/securedb ./pkg/client ./internal/catalog
 run_offline sh tools/go.sh test -count=1 \
-  -run '^(TestCredential|TestSerialWorkerCancelsCredentialRPCAndJoins|TestDisk|TestExplicitDiskLogin|TestCacheResume|TestCacheRecovery|TestNetworkOutage|TestRecoveryWorker|TestSaveRecovery|TestSyncProtocol|TestCertificateFailure|TestFailedSendJournal|TestFailedSyncPreserves|TestFailureDiagnostics|TestPermanentProtocol|TestExpiredSession|TestHTTPOutage)' \
+  -run '^(TestCredential|TestSerialWorkerCancelsCredentialRPCAndJoins|TestDisk|TestExplicitDiskLogin|TestCacheResume|TestCacheRecovery|TestNetworkOutage|TestRecoveryWorker|TestSaveRecovery|TestStoragePause|TestSyncProtocol|TestCertificateFailure|TestFailedSendJournal|TestFailedSyncPreserves|TestFailureDiagnostics|TestPermanentProtocol|TestExpiredSession|TestHTTPOutage)' \
   ./internal/service
 run_offline sh tools/go.sh test -count=1 -run '^TestHTTPResponse' ./internal/protocol
 sh tools/go.sh vet ./...

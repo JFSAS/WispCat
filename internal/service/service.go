@@ -487,11 +487,14 @@ func (s *Service) run(ctx context.Context) {
 				err = s.saveAuthenticationLocked()
 				s.mu.Unlock()
 				if err != nil {
+					// Local storage can be paused longer than the RPC deadline.
+					// Finish it before waiting and use a fresh context on resume.
+					done()
 					err = s.retrySave(ctx, epoch, err)
 					if errors.Is(err, errRecoveryInterrupted) {
-						done()
 						continue
 					}
+					call, done = s.rpc(ctx)
 				}
 			}
 		}

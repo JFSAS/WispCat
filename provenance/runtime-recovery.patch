@@ -166,7 +166,7 @@ index 2dd1298..cfdfee3 100644
  	return delay, true
  }
 diff --git a/internal/service/service.go b/internal/service/service.go
-index 8be44f8..3cf4961 100644
+index 8be44f8..9143713 100644
 --- a/internal/service/service.go
 +++ b/internal/service/service.go
 @@ -59,6 +59,12 @@ type Service struct {
@@ -247,16 +247,19 @@ index 8be44f8..3cf4961 100644
  			if err == nil {
  				recovery.reauth = false
  				s.mu.Lock()
-@@ -469,21 +487,29 @@ func (s *Service) run(ctx context.Context) {
+@@ -469,21 +487,32 @@ func (s *Service) run(ctx context.Context) {
  				err = s.saveAuthenticationLocked()
  				s.mu.Unlock()
  				if err != nil {
 -					err = &protocol.Error{Category: "checkpoint_save_failed"}
++					// Local storage can be paused longer than the RPC deadline.
++					// Finish it before waiting and use a fresh context on resume.
++					done()
 +					err = s.retrySave(ctx, epoch, err)
 +					if errors.Is(err, errRecoveryInterrupted) {
-+						done()
 +						continue
 +					}
++					call, done = s.rpc(ctx)
  				}
  			}
  		}
@@ -278,7 +281,7 @@ index 8be44f8..3cf4961 100644
  			s.mu.RLock()
  			validating := s.state != "connected"
  			s.mu.RUnlock()
-@@ -491,7 +517,7 @@ func (s *Service) run(ctx context.Context) {
+@@ -491,7 +520,7 @@ func (s *Service) run(ctx context.Context) {
  				s.connectionPhase("sync")
  			}
  			s.count("sync")
@@ -287,7 +290,7 @@ index 8be44f8..3cf4961 100644
  		}
  		done()
  		if ctx.Err() != nil {
-@@ -504,15 +530,17 @@ func (s *Service) run(ctx context.Context) {
+@@ -504,15 +533,17 @@ func (s *Service) run(ctx context.Context) {
  			continue
  		}
  		if err != nil {
@@ -310,7 +313,7 @@ index 8be44f8..3cf4961 100644
  			continue
  		}
  		s.mu.Lock()
-@@ -525,16 +553,22 @@ func (s *Service) run(ctx context.Context) {
+@@ -525,16 +556,22 @@ func (s *Service) run(ctx context.Context) {
  		s.ingestLocked(result)
  		err = s.saveLocked()
  		if err == nil {
@@ -340,7 +343,7 @@ index 8be44f8..3cf4961 100644
  		if err != nil {
  			s.block(err)
  			continue
-@@ -1005,6 +1039,10 @@ func (s *Service) sendQueued(ctx context.Context) error {
+@@ -1005,6 +1042,10 @@ func (s *Service) sendQueued(ctx context.Context) error {
  		job.Status = "sending"
  		job.Attempts++
  		if e := s.saveLocked(); e != nil {

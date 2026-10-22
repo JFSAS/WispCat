@@ -19,6 +19,7 @@ const networkRetryLimit = 6
 const protocolRetryLimit = 2
 const saveRetryLimit = 3
 const authenticationAttemptLimit = 3
+const storageProbeInterval = time.Minute
 
 var errRecoveryInterrupted = errors.New("recovery interrupted by shutdown or mode change")
 
@@ -259,9 +260,43 @@ func (s *Service) retrySave(ctx context.Context, epoch uint64, err error) error 
 		}
 		s.mu.Unlock()
 	}
-	f := classifyFailure(err, "checkpoint")
-	f.reason, f.retries, f.limit = "storage_retry_exhausted", saveRetryLimit, saveRetryLimit
-	return &f
+	return s.probeStorage(ctx, epoch, err)
+}
+
+// Exhausting the short retry burst pauses network work, not the local worker.
+// Keep the uncommitted batch and the recovery/login budget in place. A timer
+// retries only its durable save, so freeing disk space can resume the existing
+// session without an operator reconnect or another authentication attempt.
+func (s *Service) probeStorage(ctx context.Context, epoch uint64, err error) error {
+	for {
+		s.mu.Lock()
+		if ctx.Err() != nil || !s.activeEpochLocked(epoch) {
+			s.mu.Unlock()
+			return errRecoveryInterrupted
+		}
+		f := classifyFailure(err, s.operation)
+		f.retries, f.limit = saveRetryLimit, saveRetryLimit
+		s.state, s.category = "storage_paused", "storage_unavailable"
+		s.detail = "状态尚未保存，已暂停网络收发；每 60 秒自动重试保存当前批次"
+		s.connection.NextStep = "检查磁盘空间、权限和存储状态；保存成功后自动继续原会话，无需重新登录。"
+		s.reportFailureLocked(f, "storage_paused", storageProbeInterval)
+		s.mu.Unlock()
+		if s.waitRecovery(ctx, storageProbeInterval, epoch) != nil {
+			return errRecoveryInterrupted
+		}
+		s.mu.Lock()
+		if ctx.Err() != nil || !s.activeEpochLocked(epoch) {
+			s.mu.Unlock()
+			return errRecoveryInterrupted
+		}
+		err = s.saveLocked()
+		if err == nil {
+			s.reportFailureLocked(f, "save_recovered", 0)
+			s.mu.Unlock()
+			return nil
+		}
+		s.mu.Unlock()
+	}
 }
 
 func (s *Service) commitCheckpoint() error {

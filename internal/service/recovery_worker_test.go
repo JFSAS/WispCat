@@ -116,7 +116,7 @@ func TestRecoveryWorkerRetriesPendingSaveBeforeAnotherNetworkCall(t *testing.T) 
 				}
 				return s.checkpoint.Save(data)
 			}
-			s.recoveryWait = func(context.Context, time.Duration) error {
+			s.recoveryWait = func(ctx context.Context, delay time.Duration) error {
 				if syncs.Load() != 1 || s.Status()["auth_calls"] != uint64(0) {
 					t.Error("new network work started before pending save committed")
 				}
@@ -124,14 +124,18 @@ func TestRecoveryWorkerRetriesPendingSaveBeforeAnotherNetworkCall(t *testing.T) 
 				if err != nil || len(old.Messages) != 0 {
 					t.Error("durable checkpoint advanced despite failed save", err)
 				}
+				if exhausted && delay == storageProbeInterval {
+					<-ctx.Done()
+					return ctx.Err()
+				}
 				return nil
 			}
 			var reports []failureReport
 			s.failureSink = func(report failureReport) { reports = append(reports, report) }
 			runRecoveryWorker(t, s)
 			if exhausted {
-				waitRecoveryState(t, s, "needs_attention")
-				if saves.Load() != saveRetryLimit+1 || syncs.Load() != 1 || s.Status()["error_category"] != "storage_retry_exhausted" {
+				waitRecoveryState(t, s, "storage_paused")
+				if saves.Load() != saveRetryLimit+1 || syncs.Load() != 1 || s.Status()["error_category"] != "storage_unavailable" {
 					t.Fatal("save retries escaped their bound or fetched another batch")
 				}
 			} else {

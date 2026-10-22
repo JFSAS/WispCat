@@ -324,7 +324,7 @@ export function Accounts() {
               </StatusLine>
               {account.status.error_category && (
                 <Notice tone="error" title="账号当前存在异常">
-                  请检查登录状态；必要时重新扫码或导入加密凭证。
+                  {account.status.detail || "请查看登录管理中的错误类别与处理建议。"}
                 </Notice>
               )}
               <div className="form-actions">
